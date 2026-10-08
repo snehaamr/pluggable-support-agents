@@ -2,7 +2,7 @@
 
 A customer-support backend with three agents. A supervisor receives the chat message, discovers a specialist, and delegates. The Order agent and Refund agent are the only callers of tools. Tools are the only code that reads or writes orders, the return policy, and refunds.
 
-The default model is deterministic, so the service runs locally with no API key. Set `MODEL_PROVIDER=openai` and point `MODEL_BASE_URL` at any OpenAI-compatible endpoint when you want a live model. The tools, registry, and request path stay the same.
+The default model is deterministic, so the service runs locally with no API key. Set `MODEL_PROVIDER=openai` and point `MODEL_BASE_URL` at any OpenAI-compatible chat completions endpoint when you want a live model. The same agents, registry, and tools stay in place. Saved preferences and earlier turns in the session are sent with the next message, so a follow-up such as "refund that laptop" can resolve the order.
 
 ## Request path
 
@@ -46,24 +46,22 @@ pytest
 uvicorn app.main:app --reload
 ```
 
-SQLite is created at `support.db` on startup and loaded with three customers:
+Open [http://127.0.0.1:8000](http://127.0.0.1:8000) and log in. The chat page shows which agent ran each tool. `POST /chat` reads the customer from the login cookie, not from the request body.
 
-| Customer | Tier | Sample order |
-|---|---|---|
-| `CUST-789` | gold | `ORD-10001` laptop, delivered 10 days ago |
-| `CUST-456` | silver | `ORD-20001` headphones, delivered 8 days ago |
-| `CUST-123` | bronze | `ORD-30001` mug, delivered 3 days ago |
-
-```bash
-curl -s localhost:8000/chat \
-  -H 'content-type: application/json' \
-  -d '{"customer_id":"CUST-789","message":"What is the status of ORD-10001?"}'
-```
+| Username | Password | Tier | Sample order |
+|---|---|---|---|
+| `avery` | `gold-pass` | gold | `ORD-10001` laptop, delivered 10 days ago |
+| `jordan` | `silver-pass` | silver | `ORD-20001` headphones, delivered 8 days ago |
+| `sam` | `bronze-pass` | bronze | `ORD-30001` mug, delivered 3 days ago |
 
 ```bash
-curl -s localhost:8000/chat \
+curl -s -c /tmp/support.cookies localhost:8000/login \
   -H 'content-type: application/json' \
-  -d '{"customer_id":"CUST-789","message":"Refund order ORD-10001"}'
+  -d '{"username":"avery","password":"gold-pass"}'
+
+curl -s -b /tmp/support.cookies localhost:8000/chat \
+  -H 'content-type: application/json' \
+  -d '{"message":"What is the status of ORD-10001?"}'
 ```
 
 Postgres instead of SQLite:

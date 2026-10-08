@@ -1,7 +1,10 @@
 import json
 import re
 
+from sqlalchemy import select
+
 from app.context import RequestContext
+from app.db import Order
 from app.turns import ModelTurn, ToolCall
 
 
@@ -47,11 +50,10 @@ def plan_supervisor(messages: list[dict], ctx: RequestContext) -> ModelTurn:
 
 
 def plan_order(messages: list[dict], ctx: RequestContext) -> ModelTurn:
-    user_text = latest_user(messages)
     if "check_order_details" not in tool_names(messages):
-        match = re.search(r"ORD-\d+", user_text)
-        if match:
-            arguments = {"order_id": match.group(0)}
+        order_id = referenced_order_id(messages, ctx)
+        if order_id:
+            arguments = {"order_id": order_id}
         else:
             arguments = {"customer_id": ctx.customer_id}
         return ModelTurn(tool_calls=[ToolCall("check_order_details", arguments)])
@@ -63,8 +65,7 @@ def plan_order(messages: list[dict], ctx: RequestContext) -> ModelTurn:
 def plan_refund(messages: list[dict], ctx: RequestContext) -> ModelTurn:
     user_text = latest_user(messages)
     called = tool_names(messages)
-    order_match = re.search(r"ORD-\d+", user_text)
-    order_id = order_match.group(0) if order_match else ""
+    order_id = referenced_order_id(messages, ctx)
     reason = "damaged on arrival" if re.search(r"damage|defect", user_text, re.I) else "customer request"
     damage_note = "customer reported damage" if "damage note" in user_text.lower() else ""
 
@@ -125,6 +126,32 @@ def preference_fact(text: str) -> str | None:
     if re.search(r"\b(i prefer|i like|my preferred)\b", text, re.I):
         return text.strip()
     return None
+
+
+def referenced_order_id(messages: list[dict], ctx: RequestContext) -> str:
+    """Resolve an order from this message, or from an earlier turn in the session."""
+    latest = latest_user(messages)
+    direct = re.search(r"ORD-\d+", latest)
+    if direct:
+        return direct.group(0)
+
+    orders = ctx.db.scalars(
+        select(Order).where(Order.customer_id == ctx.customer_id).order_by(Order.order_id)
+    ).all()
+    for order in orders:
+        if re.search(rf"\b{re.escape(order.product_name)}\b", latest, re.IGNORECASE):
+            return order.order_id
+
+    if re.search(r"\b(it|that|this)\b", latest, re.IGNORECASE):
+        earlier = "\n".join(
+            message.get("content") or ""
+            for message in messages
+            if message.get("role") in {"user", "assistant"} and (message.get("content") or "") != latest
+        )
+        found = re.findall(r"ORD-\d+", earlier)
+        if found:
+            return found[-1]
+    return ""
 
 
 def latest_user(messages: list[dict]) -> str:

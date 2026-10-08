@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Support agents</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #1c1917;
+      --muted: #57534e;
+      --line: #e7e5e4;
+      --paper: #fafaf9;
+      --panel: #ffffff;
+      --accent: #0f766e;
+      --accent-ink: #ffffff;
+      --danger: #9f1239;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font: 16px/1.5 "Iowan Old Style", Palatino, Georgia, serif;
+      color: var(--ink);
+      background: var(--paper);
+    }
+    header, main { width: min(760px, calc(100% - 32px)); margin: 0 auto; }
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      padding: 28px 0 12px;
+    }
+    h1 { font-size: 1.4rem; font-weight: 500; margin: 0; }
+    .model { color: var(--muted); font-size: 0.85rem; }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 20px;
+    }
+    label { display: block; font-size: 0.85rem; color: var(--muted); margin-top: 12px; }
+    input, button, select {
+      font: inherit;
+      color: inherit;
+    }
+    input {
+      width: 100%;
+      margin-top: 4px;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+    }
+    button {
+      margin-top: 16px;
+      border: 0;
+      border-radius: 8px;
+      padding: 10px 14px;
+      background: var(--accent);
+      color: var(--accent-ink);
+      cursor: pointer;
+    }
+    button.secondary { background: transparent; color: var(--ink); border: 1px solid var(--line); }
+    .error { color: var(--danger); min-height: 1.2em; }
+    .accounts { margin: 16px 0 0; padding: 0; list-style: none; color: var(--muted); font-size: 0.92rem; }
+    .accounts button {
+      margin: 0 0 0 8px;
+      padding: 2px 8px;
+      background: transparent;
+      color: var(--accent);
+      border: 1px solid var(--line);
+    }
+    #chat-view { display: none; }
+    .who { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 12px; }
+    .transcript { display: flex; flex-direction: column; gap: 12px; min-height: 240px; }
+    .bubble { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+    .bubble.user { background: #f5f5f4; }
+    .steps { margin: 8px 0 0; padding: 0; list-style: none; color: var(--muted); font-size: 0.82rem; }
+    form.composer { display: flex; gap: 8px; margin-top: 12px; }
+    form.composer input { margin: 0; }
+    form.composer button { margin: 0; }
+    @media (max-width: 640px) {
+      .who, form.composer { flex-direction: column; align-items: stretch; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Support agents</h1>
+    <div class="model" id="model">Loading model…</div>
+  </header>
+  <main>
+    <section class="card" id="login-view">
+      <form id="login-form">
+        <label for="username">Username</label>
+        <input id="username" name="username" autocomplete="username" required>
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" required>
+        <p class="error" id="login-error" role="alert"></p>
+        <button type="submit">Log in</button>
+      </form>
+      <ul class="accounts">
+        <li>Avery Chen, gold <button type="button" data-user="avery" data-pass="gold-pass">avery</button></li>
+        <li>Jordan Lee, silver <button type="button" data-user="jordan" data-pass="silver-pass">jordan</button></li>
+        <li>Sam Patel, bronze <button type="button" data-user="sam" data-pass="bronze-pass">sam</button></li>
+      </ul>
+    </section>
+    <section id="chat-view">
+      <div class="who">
+        <div>
+          <strong id="who-name"></strong>
+          <div class="model" id="who-meta"></div>
+        </div>
+        <button class="secondary" id="logout" type="button">Log out</button>
+      </div>
+      <div class="card">
+        <div class="transcript" id="transcript" aria-live="polite"></div>
+        <form class="composer" id="composer">
+          <label class="model" for="message" style="position:absolute;left:-999px">Message</label>
+          <input id="message" name="message" placeholder="Ask about an order or a refund" required>
+          <button type="submit">Send</button>
+        </form>
+      </div>
+    </section>
+  </main>
+  <script>
+    const loginView = document.querySelector("#login-view");
+    const chatView = document.querySelector("#chat-view");
+    const transcript = document.querySelector("#transcript");
+    let sessionId = "";
+
+    fetch("/health").then((response) => response.json()).then((body) => {
+      document.querySelector("#model").textContent = "Model: " + body.model_name;
+    });
+
+    document.querySelectorAll("[data-user]").forEach((button) => {
+      button.addEventListener("click", () => {
+        document.querySelector("#username").value = button.dataset.user;
+        document.querySelector("#password").value = button.dataset.pass;
+      });
+    });
+
+    document.querySelector("#login-form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const error = document.querySelector("#login-error");
+      error.textContent = "";
+      const response = await fetch("/login", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          username: document.querySelector("#username").value,
+          password: document.querySelector("#password").value,
+        }),
+      });
+      if (!response.ok) {
+        error.textContent = "That username and password did not match.";
+        return;
+      }
+      showCustomer(await response.json());
+    });
+
+    document.querySelector("#logout").addEventListener("click", async () => {
+      await fetch("/logout", { method: "POST" });
+      sessionId = "";
+      transcript.replaceChildren();
+      loginView.style.display = "";
+      chatView.style.display = "none";
+    });
+
+    document.querySelector("#composer").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const input = document.querySelector("#message");
+      const message = input.value.trim();
+      if (!message) return;
+      input.value = "";
+      addBubble("user", message, []);
+      const response = await fetch("/chat", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ message, session_id: sessionId || null }),
+      });
+      if (response.status === 401) {
+        loginView.style.display = "";
+        chatView.style.display = "none";
+        return;
+      }
+      const body = await response.json();
+      sessionId = body.session_id;
+      addBubble("assistant", body.reply, body.steps || []);
+    });
+
+    function showCustomer(customer) {
+      document.querySelector("#who-name").textContent = customer.name;
+      document.querySelector("#who-meta").textContent = customer.id + " · " + customer.tier;
+      loginView.style.display = "none";
+      chatView.style.display = "block";
+      document.querySelector("#message").focus();
+    }
+
+    function addBubble(role, text, steps) {
+      const bubble = document.createElement("div");
+      bubble.className = "bubble " + role;
+      bubble.textContent = text;
+      if (steps.length) {
+        const list = document.createElement("ul");
+        list.className = "steps";
+        steps.forEach((step) => {
+          const item = document.createElement("li");
+          item.textContent = step.agent + " · " + step.tool;
+          list.appendChild(item);
+        });
+        bubble.appendChild(list);
+      }
+      transcript.appendChild(bubble);
+      bubble.scrollIntoView({ block: "nearest" });
+    }
+
+    fetch("/me").then(async (response) => {
+      if (response.ok) showCustomer(await response.json());
+    });
+  </script>
+</body>
+</html>

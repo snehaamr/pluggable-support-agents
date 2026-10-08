@@ -13,3 +13,5 @@ class RequestContext:
     current_agent: str = ""
     agents_used: list[str] = field(default_factory=list)
     steps: list[dict] = field(default_factory=list)
+    prior_messages: list[dict] = field(default_factory=list)
+    memory_facts: list[str] = field(default_factory=list)

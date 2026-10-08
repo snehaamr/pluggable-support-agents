@@ -76,7 +76,8 @@ class OpenAICompatibleModel:
         message = response.json()["choices"][0]["message"]
         tool_calls = []
         for call in message.get("tool_calls") or []:
-            arguments = json.loads(call["function"].get("arguments") or "{}")
+            raw = call["function"].get("arguments") or "{}"
+            arguments = json.loads(raw) if isinstance(raw, str) else raw
             tool_calls.append(ToolCall(call["function"]["name"], arguments))
         return ModelTurn(content=message.get("content"), tool_calls=tool_calls)
 

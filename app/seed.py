@@ -4,22 +4,55 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.auth import hash_password
 from app.db import Customer, Order
+
+
+DEMO_CUSTOMERS = (
+    ("CUST-789", "avery", "gold-pass", "Avery Chen", "gold"),
+    ("CUST-456", "jordan", "silver-pass", "Jordan Lee", "silver"),
+    ("CUST-123", "sam", "bronze-pass", "Sam Patel", "bronze"),
+)
 
 
 def seed(db: Session, today: date | None = None) -> None:
     existing = db.scalar(select(Customer.id).limit(1))
-    if existing:
-        return
+    if not existing:
+        today = today or date.today()
+        db.add_all(_customers())
+        _load_orders(db, today)
+    _backfill_logins(db)
 
-    today = today or date.today()
-    db.add_all(
-        [
-            Customer(id="CUST-789", name="Avery Chen", tier="gold"),
-            Customer(id="CUST-456", name="Jordan Lee", tier="silver"),
-            Customer(id="CUST-123", name="Sam Patel", tier="bronze"),
-        ]
-    )
+
+def _customers() -> list[Customer]:
+    return [
+        Customer(
+            id=customer_id,
+            username=username,
+            password_hash=hash_password(password),
+            name=name,
+            tier=tier,
+        )
+        for customer_id, username, password, name, tier in DEMO_CUSTOMERS
+    ]
+
+
+def _backfill_logins(db: Session) -> None:
+    for customer_id, username, password, name, tier in DEMO_CUSTOMERS:
+        customer = db.get(Customer, customer_id)
+        if customer is None:
+            continue
+        if not customer.username:
+            customer.username = username
+        if not customer.password_hash:
+            customer.password_hash = hash_password(password)
+        if not customer.name:
+            customer.name = name
+        if not customer.tier:
+            customer.tier = tier
+
+
+def _load_orders(db: Session, today: date) -> None:
     db.add_all(
         [
             _order(

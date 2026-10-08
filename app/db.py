@@ -13,8 +13,18 @@ class Customer(Base):
     __tablename__ = "customers"
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
+    username: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+    password_hash: Mapped[str] = mapped_column(String, nullable=False)
     name: Mapped[str] = mapped_column(String, nullable=False)
     tier: Mapped[str] = mapped_column(String, nullable=False)
+
+
+class AuthSession(Base):
+    __tablename__ = "auth_sessions"
+
+    token: Mapped[str] = mapped_column(String, primary_key=True)
+    customer_id: Mapped[str] = mapped_column(ForeignKey("customers.id"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class Order(Base):
@@ -60,6 +70,21 @@ class MemoryFact(Base):
     customer_id: Mapped[str] = mapped_column(String, index=True)
     fact: Mapped[str] = mapped_column(String, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+def ensure_auth_columns(engine) -> None:
+    """Add login columns when an older database already has customers."""
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(engine)
+    if "customers" not in inspector.get_table_names():
+        return
+    names = {column["name"] for column in inspector.get_columns("customers")}
+    with engine.begin() as connection:
+        if "username" not in names:
+            connection.execute(text("ALTER TABLE customers ADD COLUMN username VARCHAR"))
+        if "password_hash" not in names:
+            connection.execute(text("ALTER TABLE customers ADD COLUMN password_hash VARCHAR"))
 
 
 def make_engine(database_url: str):

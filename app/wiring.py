@@ -58,7 +58,9 @@ def build_runtime(settings: Settings):
         system_prompt=(
             "You are the support supervisor. A preference statement is not a request: "
             "acknowledge it with the remember tool and do not start a workflow. "
-            "For an order or refund request, search for a specialist, then delegate. "
+            "Do not call remember for a preference already listed in the prompt. "
+            "For an order or refund request, call search_agents, then delegate. "
+            "When you delegate, include the concrete order id if the conversation identifies one. "
             "Do not answer order or refund facts yourself."
         ),
         tool_names=["remember", "search_agents", "delegate"],

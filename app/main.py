@@ -7,7 +7,7 @@ from sqlalchemy.exc import OperationalError
 
 from app.api import router
 from app.config import Settings
-from app.db import Base, make_engine, make_session_factory
+from app.db import Base, ensure_auth_columns, make_engine, make_session_factory
 from app.seed import seed
 from app.wiring import build_runtime
 
@@ -42,6 +42,7 @@ def _prepare_database(engine, session_factory) -> None:
     for attempt in range(15):
         try:
             Base.metadata.create_all(engine)
+            ensure_auth_columns(engine)
             with session_factory() as db:
                 seed(db)
                 db.commit()

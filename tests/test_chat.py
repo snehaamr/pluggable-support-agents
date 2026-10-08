@@ -20,8 +20,23 @@ def client(tmp_path):
         yield test_client
 
 
+def login(client, username="avery", password="gold-pass"):
+    response = client.post("/login", json={"username": username, "password": password})
+    assert response.status_code == 200, response.text
+    return response
+
+
+def send(client, message, session_id=None, **extra):
+    payload = {"message": message, **extra}
+    if session_id:
+        payload["session_id"] = session_id
+    return client.post("/chat", json=payload)
+
+
 def test_health_and_agent_registry(client):
-    assert client.get("/health").json() == {"status": "ok"}
+    body = client.get("/health").json()
+    assert body["status"] == "ok"
+    assert body["model_provider"] == "deterministic"
     agents = {item["name"]: item["role"] for item in client.get("/agents").json()["agents"]}
     assert agents == {
         "Supervisor": "supervisor",
@@ -31,10 +46,8 @@ def test_health_and_agent_registry(client):
 
 
 def test_order_lookup_uses_the_order_agent_and_hides_contact_details(client):
-    response = client.post(
-        "/chat",
-        json={"customer_id": "CUST-789", "message": "What is the status of ORD-10001?"},
-    )
+    login(client)
+    response = send(client, "What is the status of ORD-10001?")
     assert response.status_code == 200
     body = response.json()
     assert body["trace_id"]
@@ -81,10 +94,8 @@ def test_tool_payload_redacts_email_and_address(client):
 
 
 def test_preference_is_remembered_without_calling_a_specialist(client):
-    response = client.post(
-        "/chat",
-        json={"customer_id": "CUST-789", "message": "I prefer email for refund updates"},
-    )
+    login(client)
+    response = send(client, "I prefer email for refund updates")
     assert response.status_code == 200
     body = response.json()
     assert body["steps"] == [{"agent": "Supervisor", "tool": "remember"}]
@@ -98,13 +109,8 @@ def test_preference_is_remembered_without_calling_a_specialist(client):
 
 
 def test_preference_and_order_request_do_both(client):
-    response = client.post(
-        "/chat",
-        json={
-            "customer_id": "CUST-789",
-            "message": "I prefer email and what is the status of ORD-10001?",
-        },
-    )
+    login(client)
+    response = send(client, "I prefer email and what is the status of ORD-10001?")
     body = response.json()
     assert [step["tool"] for step in body["steps"]] == [
         "remember",
@@ -117,10 +123,8 @@ def test_preference_and_order_request_do_both(client):
 
 
 def test_gold_refund_is_issued_through_the_refund_agent(client):
-    response = client.post(
-        "/chat",
-        json={"customer_id": "CUST-789", "message": "Refund order ORD-10001"},
-    )
+    login(client)
+    response = send(client, "Refund order ORD-10001")
     body = response.json()
     assert [step["tool"] for step in body["steps"]] == [
         "search_agents",
@@ -141,10 +145,8 @@ def test_gold_refund_is_issued_through_the_refund_agent(client):
 
 
 def test_old_order_is_not_refunded(client):
-    response = client.post(
-        "/chat",
-        json={"customer_id": "CUST-789", "message": "Refund order ORD-10002"},
-    )
+    login(client)
+    response = send(client, "Refund order ORD-10002")
     body = response.json()
     assert "process_refund" not in [step["tool"] for step in body["steps"]]
     assert "not eligible" in body["reply"].lower() or "outside" in body["reply"].lower()
@@ -157,31 +159,22 @@ def test_old_order_is_not_refunded(client):
 
 
 def test_customer_cannot_refund_another_customers_order(client):
-    response = client.post(
-        "/chat",
-        json={"customer_id": "CUST-456", "message": "Refund order ORD-10001"},
-    )
+    login(client, "jordan", "silver-pass")
+    response = send(client, "Refund order ORD-10001", customer_id="CUST-789")
     body = response.json()
     assert "not found" in body["reply"].lower()
     assert "process_refund" not in [step["tool"] for step in body["steps"]]
 
 
 def test_silver_refund_uses_the_tier_percentage(client):
-    response = client.post(
-        "/chat",
-        json={"customer_id": "CUST-456", "message": "Refund order ORD-20001"},
-    )
+    login(client, "jordan", "silver-pass")
+    response = send(client, "Refund order ORD-20001")
     assert "112.49" in response.json()["reply"]
 
 
 def test_eligibility_list_covers_each_order(client):
-    response = client.post(
-        "/chat",
-        json={
-            "customer_id": "CUST-789",
-            "message": "Which of my orders are eligible for a refund?",
-        },
-    )
+    login(client)
+    response = send(client, "Which of my orders are eligible for a refund?")
     reply = response.json()["reply"]
     assert "ORD-10001" in reply
     assert "ORD-10002" in reply
@@ -189,9 +182,34 @@ def test_eligibility_list_covers_each_order(client):
     assert "list_eligible" in [step["tool"] for step in response.json()["steps"]]
 
 
-def test_unknown_customer_is_rejected(client):
-    response = client.post("/chat", json={"customer_id": "NOPE", "message": "hello"})
-    assert response.status_code == 404
+def test_chat_requires_login(client):
+    response = send(client, "hello")
+    assert response.status_code == 401
+
+
+def test_wrong_password_is_rejected(client):
+    response = client.post("/login", json={"username": "avery", "password": "nope"})
+    assert response.status_code == 401
+
+
+def test_follow_up_refund_uses_the_earlier_order(client):
+    login(client)
+    first = send(client, "What is the status of ORD-10001?")
+    assert first.status_code == 200
+    second = send(client, "Refund that laptop", session_id=first.json()["session_id"])
+    body = second.json()
+    assert "ORD-10001" in body["reply"] or "1999.99" in body["reply"]
+    assert "process_refund" in [step["tool"] for step in body["steps"]]
+    assert "check_order_details" not in [step["tool"] for step in body["steps"]]
+
+
+def test_chat_page_offers_login(client):
+    page = client.get("/")
+    assert page.status_code == 200
+    assert "Log in" in page.text
+    assert "avery" in page.text
+    assert "jordan" in page.text
+    assert "sam" in page.text
 
 
 def test_process_refund_refuses_an_ineligible_order(client):

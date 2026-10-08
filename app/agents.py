@@ -29,12 +29,13 @@ class Agent:
         ctx.current_agent = self.name
         if self.name not in ctx.agents_used:
             ctx.agents_used.append(self.name)
-        messages = [{"role": "user", "content": task}]
+        messages = [dict(message) for message in ctx.prior_messages]
+        messages.append({"role": "user", "content": task})
         try:
-            for _ in range(6):
+            for _ in range(8):
                 turn = self.model.complete(
                     agent_name=self.name,
-                    system=self.system_prompt,
+                    system=self._system(ctx),
                     messages=messages,
                     tools=self.catalog.schemas(self.tool_names),
                     context=ctx,
@@ -65,3 +66,14 @@ class Agent:
             return "I couldn't finish that request."
         finally:
             ctx.current_agent = previous
+
+    def _system(self, ctx: RequestContext) -> str:
+        lines = [self.system_prompt]
+        if ctx.memory_facts:
+            lines.append("Customer preferences already saved:")
+            lines.extend(f"- {fact}" for fact in ctx.memory_facts)
+        lines.append(
+            "Earlier messages in this conversation are included. "
+            "Resolve references such as 'that laptop' or 'it' from those messages before calling a tool."
+        )
+        return "\n".join(lines)
