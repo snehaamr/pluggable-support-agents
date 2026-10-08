@@ -1,0 +1,17 @@
+RETURN POLICY
+
+Membership tiers
+- Gold: 30-day return window from the delivery date. Refund is 100% of the purchase price.
+- Silver: 20-day return window from the delivery date. Refund is 75% of the purchase price.
+- Bronze: 15-day return window from the delivery date. The refund amount depends on product condition and is not issued automatically.
+
+Eligible order statuses
+- delivered
+- shipped
+- return_requested
+
+Damage and defects
+- Damaged or defective items need a damage note before a refund can be issued.
+
+Refund timing
+- Approved refunds are credited to the original payment method within 5 days.
