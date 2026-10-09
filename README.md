@@ -1,6 +1,6 @@
 # pluggable-support-agents
 
-A customer-support backend with three agents. A supervisor receives the chat message, discovers a specialist, and delegates. The Order agent and Refund agent are the only callers of tools. Tools are the only code that reads or writes orders, the return policy, and refunds.
+A customer-support backend with three agents. A supervisor receives the chat message, discovers a specialist, and delegates over HTTP. The Order agent listens on port 8001 and the Refund agent on port 8002. Tools are the only code that reads or writes orders, the return policy, and refunds.
 
 The default model is deterministic, so the service runs locally with no API key. Set `MODEL_PROVIDER=openai` and point `MODEL_BASE_URL` at any OpenAI-compatible chat completions endpoint when you want a live model. The same agents, registry, and tools stay in place. Saved preferences and earlier turns in the session are sent with the next message, so a follow-up such as "refund that laptop" can resolve the order.
 
@@ -8,23 +8,26 @@ The default model is deterministic, so the service runs locally with no API key.
 
 ```mermaid
 flowchart TD
-    chat[POST /chat] --> supervisor[Supervisor]
+    chat[POST /chat] --> guard[Input guard]
+    guard --> supervisor[Supervisor]
     supervisor --> registry[Agent registry]
-    registry --> orderAgent[Order agent]
-    registry --> refundAgent[Refund agent]
+    registry --> orderAgent["Order agent :8001"]
+    registry --> refundAgent["Refund agent :8002"]
     orderAgent --> gateway[Tool catalog]
     refundAgent --> gateway
     gateway --> orders[(Orders)]
-    gateway --> policy[(Return policy)]
+    gateway --> policy[(Return policy sections)]
     gateway --> refunds[(Refunds)]
+    supervisor --> traces[(Trace spans)]
 ```
 
 `POST /chat` loads the customer, then the supervisor runs:
 
-1. A preference such as "I prefer email" is saved and does not start a workflow.
-2. An order or refund request searches the registry and delegates to the matching specialist.
-3. The specialist calls a tool. Email and shipping address are masked before the result returns to the agent.
-4. The reply, the agents involved, and the tool steps come back with a trace id.
+1. A card number or a prompt-injection phrase is refused before any agent runs. Email addresses and card numbers are masked in stored messages and in tool results.
+2. A preference such as "I prefer email" is saved and does not start a workflow.
+3. An order or refund request searches the registry and delegates to the specialist URL.
+4. The specialist calls a tool. A policy question returns the matching section, not the whole file.
+5. The reply, the agents involved, and each step's duration come back with a trace id. `GET /traces/{trace_id}` returns the same waterfall.
 
 ## Refund rules
 
@@ -46,7 +49,7 @@ pytest
 uvicorn app.main:app --reload
 ```
 
-Open [http://127.0.0.1:8000](http://127.0.0.1:8000) and log in. The chat page shows which agent ran each tool. `POST /chat` reads the customer from the login cookie, not from the request body.
+Open [http://127.0.0.1:8000](http://127.0.0.1:8000) and log in. Starting the app also starts the Order agent on [http://127.0.0.1:8001](http://127.0.0.1:8001) and the Refund agent on [http://127.0.0.1:8002](http://127.0.0.1:8002). The chat page shows which agent ran each tool and how long that step took. `POST /chat` reads the customer from the login cookie, not from the request body.
 
 | Username | Password | Tier | Sample order |
 |---|---|---|---|
@@ -81,3 +84,6 @@ Copy `.env.example` to `.env`.
 | `MODEL_BASE_URL` | OpenAI-compatible chat completions endpoint |
 | `MODEL_NAME` | Model name sent to that endpoint |
 | `MODEL_API_KEY` | Bearer token for the live model |
+| `ORDER_AGENT_URL` | Address the supervisor uses for the Order agent. Defaults to `http://127.0.0.1:8001`. |
+| `REFUND_AGENT_URL` | Address the supervisor uses for the Refund agent. Defaults to `http://127.0.0.1:8002`. |
+| `START_AGENT_SERVICES` | When true, the main process starts both specialist servers. Tests set this to false and call the apps in process. |

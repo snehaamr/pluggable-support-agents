@@ -11,6 +11,7 @@ SENSITIVE_KEYS = {
 }
 
 _EMAIL = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
+_CARD = re.compile(r"\b\d{4}[ -]?\d{4}[ -]?\d{4}[ -]?\d{4}\b")
 
 
 def redact(value):
@@ -25,9 +26,14 @@ def redact(value):
     if isinstance(value, list):
         return [redact(item) for item in value]
     if isinstance(value, str):
-        return _EMAIL.sub("[REDACTED]", value)
+        return _mask_text(value)
     return value
 
 
 def redact_text(text: str) -> str:
-    return _EMAIL.sub("[REDACTED]", text)
+    return _mask_text(text)
+
+
+def _mask_text(text: str) -> str:
+    text = _EMAIL.sub("[REDACTED]", text)
+    return _CARD.sub("[REDACTED]", text)

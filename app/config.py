@@ -8,5 +8,8 @@ class Settings(BaseSettings):
     model_base_url: str = "https://api.openai.com/v1"
     model_api_key: str = ""
     model_timeout_seconds: float = 60.0
+    order_agent_url: str = "http://127.0.0.1:8001"
+    refund_agent_url: str = "http://127.0.0.1:8002"
+    start_agent_services: bool = True
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")

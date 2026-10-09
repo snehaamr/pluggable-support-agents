@@ -90,6 +90,7 @@ def live_client(tmp_path, monkeypatch):
         model_provider="openai",
         model_api_key="test-key",
         model_base_url="http://models.test/v1",
+        start_agent_services=False,
     )
     application = create_app(settings)
     with TestClient(application) as test_client:

@@ -6,7 +6,7 @@ from sqlalchemy import select
 
 from app.context import RequestContext
 from app.db import Order, Refund
-from app.policy import evaluate, load_policy_text
+from app.policy import evaluate, search_policy
 
 
 def check_order_details(arguments: dict, ctx: RequestContext) -> dict:
@@ -27,7 +27,7 @@ def check_order_details(arguments: dict, ctx: RequestContext) -> dict:
 
 def refund_policy(arguments: dict, ctx: RequestContext) -> dict:
     question = (arguments.get("question") or "").strip()
-    return {"question": question, "policy": load_policy_text()}
+    return {"question": question, "tier": ctx.tier, "policy": search_policy(question, ctx.tier)}
 
 
 def check_eligible(arguments: dict, ctx: RequestContext) -> dict:

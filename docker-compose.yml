@@ -15,6 +15,8 @@ services:
     build: .
     ports:
       - "8000:8000"
+      - "8001:8001"
+      - "8002:8002"
     environment:
       DATABASE_URL: postgresql+psycopg://support:support@db:5432/support
       MODEL_PROVIDER: deterministic

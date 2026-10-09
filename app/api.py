@@ -10,7 +10,8 @@ from sqlalchemy import select
 
 from app.auth import find_customer
 from app.context import RequestContext
-from app.db import AuthSession, ChatMessage, Customer, MemoryFact
+from app.db import AuthSession, ChatMessage, Customer, MemoryFact, TraceSpan
+from app.guard import inspect_text, mask_for_storage
 
 
 router = APIRouter()
@@ -40,6 +41,8 @@ def health(request: Request) -> dict:
         "status": "ok",
         "model_provider": settings.model_provider,
         "model_name": settings.model_name if settings.model_provider != "deterministic" else "deterministic",
+        "order_agent_url": settings.order_agent_url,
+        "refund_agent_url": settings.refund_agent_url,
     }
 
 
@@ -55,7 +58,12 @@ def agents(request: Request) -> dict:
                 "description": supervisor.description,
             },
             *[
-                {"name": item["name"], "role": "specialist", "description": item["description"]}
+                {
+                    "name": item["name"],
+                    "role": "specialist",
+                    "description": item["description"],
+                    "url": item["url"],
+                }
                 for item in registry.all()
             ],
         ]
@@ -142,18 +150,24 @@ def chat(body: ChatIn, request: Request):
         ).all()
 
         now = datetime.now(timezone.utc)
+        refusal = inspect_text(body.message)
         db.add(
             ChatMessage(
                 session_id=session_id,
                 customer_id=customer.id,
                 role="user",
-                content=body.message,
+                content=mask_for_storage(body.message),
                 created_at=now,
             )
         )
-        db.flush()
+        db.commit()
 
         trace_id = uuid.uuid4().hex
+        if refusal:
+            steps = [{"agent": "Guard", "tool": "input", "status": "blocked", "duration_ms": 0}]
+            _finish_turn(db, session_id, customer.id, trace_id, refusal, steps)
+            return _chat_response(session_id, trace_id, refusal, ["Guard"], steps)
+
         ctx = RequestContext(
             trace_id=trace_id,
             customer_id=customer.id,
@@ -166,26 +180,8 @@ def chat(body: ChatIn, request: Request):
             memory_facts=[row.fact for row in facts],
         )
         reply = request.app.state.supervisor.run(body.message, ctx)
-        db.add(
-            ChatMessage(
-                session_id=session_id,
-                customer_id=customer.id,
-                role="assistant",
-                content=reply,
-                created_at=datetime.now(timezone.utc),
-            )
-        )
-        db.commit()
-        return JSONResponse(
-            content={
-                "session_id": session_id,
-                "trace_id": trace_id,
-                "reply": reply,
-                "agents": ctx.agents_used,
-                "steps": ctx.steps,
-            },
-            headers={"X-Trace-Id": trace_id},
-        )
+        _finish_turn(db, session_id, customer.id, trace_id, reply, ctx.steps)
+        return _chat_response(session_id, trace_id, reply, ctx.agents_used, ctx.steps)
     except HTTPException:
         db.rollback()
         raise
@@ -194,6 +190,74 @@ def chat(body: ChatIn, request: Request):
         raise
     finally:
         db.close()
+
+
+@router.get("/traces/{trace_id}")
+def trace(trace_id: str, request: Request):
+    db = request.app.state.session_factory()
+    try:
+        customer = _customer_from_cookie(request, db)
+        spans = db.scalars(
+            select(TraceSpan)
+            .where(TraceSpan.trace_id == trace_id, TraceSpan.customer_id == customer.id)
+            .order_by(TraceSpan.sequence)
+        ).all()
+        if not spans:
+            raise HTTPException(status_code=404, detail="Trace not found")
+        return {
+            "trace_id": trace_id,
+            "session_id": spans[0].session_id,
+            "spans": [
+                {
+                    "agent": span.agent,
+                    "tool": span.tool,
+                    "status": span.status,
+                    "duration_ms": span.duration_ms,
+                }
+                for span in spans
+            ],
+        }
+    finally:
+        db.close()
+
+
+def _finish_turn(db, session_id: str, customer_id: str, trace_id: str, reply: str, steps: list[dict]) -> None:
+    db.add(
+        ChatMessage(
+            session_id=session_id,
+            customer_id=customer_id,
+            role="assistant",
+            content=reply,
+            created_at=datetime.now(timezone.utc),
+        )
+    )
+    for index, step in enumerate(steps):
+        db.add(
+            TraceSpan(
+                trace_id=trace_id,
+                session_id=session_id,
+                customer_id=customer_id,
+                sequence=index,
+                agent=step.get("agent", ""),
+                tool=step.get("tool", ""),
+                status=step.get("status", "ok"),
+                duration_ms=float(step.get("duration_ms") or 0),
+            )
+        )
+    db.commit()
+
+
+def _chat_response(session_id: str, trace_id: str, reply: str, agents: list[str], steps: list[dict]):
+    return JSONResponse(
+        content={
+            "session_id": session_id,
+            "trace_id": trace_id,
+            "reply": reply,
+            "agents": agents,
+            "steps": steps,
+        },
+        headers={"X-Trace-Id": trace_id},
+    )
 
 
 def _customer_from_cookie(request: Request, db) -> Customer:

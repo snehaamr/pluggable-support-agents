@@ -206,7 +206,8 @@
         list.className = "steps";
         steps.forEach((step) => {
           const item = document.createElement("li");
-          item.textContent = step.agent + " · " + step.tool;
+          const duration = Number(step.duration_ms || 0).toFixed(0);
+          item.textContent = step.agent + " · " + step.tool + " · " + duration + "ms";
           list.appendChild(item);
         });
         bubble.appendChild(list);

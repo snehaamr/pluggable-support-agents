@@ -4,54 +4,31 @@ from app.agents import Agent
 from app.catalog import Tool, ToolCatalog
 from app.config import Settings
 from app.context import RequestContext
-from app.llm import build_model
-from app.registry import Registry
-from app.tools import check_eligible, check_order_details, list_eligible, process_refund, refund_policy
 from app.db import MemoryFact
+from app.llm import build_model
+from app.registry import RegisteredAgent, Registry
+from app.services import (
+    ORDER_DESCRIPTION,
+    REFUND_DESCRIPTION,
+    AgentCaller,
+)
 
 
-_OBJECT = {
-    "type": "object",
-    "additionalProperties": False,
-}
+_OBJECT = {"type": "object", "additionalProperties": False}
 
 
-def build_runtime(settings: Settings):
+def build_runtime(settings: Settings, caller: AgentCaller):
     catalog = ToolCatalog()
-    _add_data_tools(catalog)
     model = build_model(
         settings.model_provider,
         settings.model_name,
         settings.model_base_url,
         settings.model_api_key,
     )
-    order_agent = Agent(
-        name="Order agent",
-        description="Order lookup by id and listing a customer's orders.",
-        system_prompt=(
-            "You are the Order agent. Use check_order_details for every order question. "
-            "Return only the facts the tool gives you. Do not invent orders."
-        ),
-        tool_names=["check_order_details"],
-        model=model,
-        catalog=catalog,
-    )
-    refund_agent = Agent(
-        name="Refund agent",
-        description="Refund eligibility, return policy, and issuing refunds.",
-        system_prompt=(
-            "You are the Refund agent. Read the return policy before deciding eligibility. "
-            "Call check_eligible before process_refund. Never invent a refund. "
-            "If the tool says the refund needs evidence or review, stop and say so."
-        ),
-        tool_names=["refund_policy", "check_eligible", "list_eligible", "process_refund"],
-        model=model,
-        catalog=catalog,
-    )
     registry = Registry()
-    registry.register(order_agent)
-    registry.register(refund_agent)
-    _add_supervisor_tools(catalog, registry)
+    registry.register(RegisteredAgent("Order agent", ORDER_DESCRIPTION, settings.order_agent_url))
+    registry.register(RegisteredAgent("Refund agent", REFUND_DESCRIPTION, settings.refund_agent_url))
+    _add_supervisor_tools(catalog, registry, caller)
     supervisor = Agent(
         name="Supervisor",
         description="Routes customer messages to specialist agents and remembers preferences.",
@@ -70,76 +47,7 @@ def build_runtime(settings: Settings):
     return supervisor, registry, catalog
 
 
-def _add_data_tools(catalog: ToolCatalog) -> None:
-    catalog.add(
-        Tool(
-            name="check_order_details",
-            description="Look up one order, or every order for the signed-in customer.",
-            parameters={
-                **_OBJECT,
-                "properties": {
-                    "order_id": {"type": "string"},
-                    "customer_id": {"type": "string"},
-                },
-            },
-            fn=check_order_details,
-        )
-    )
-    catalog.add(
-        Tool(
-            name="refund_policy",
-            description="Read the return policy.",
-            parameters={
-                **_OBJECT,
-                "properties": {"question": {"type": "string"}},
-                "required": ["question"],
-            },
-            fn=refund_policy,
-        )
-    )
-    catalog.add(
-        Tool(
-            name="check_eligible",
-            description="Decide whether one order can be refunded.",
-            parameters={
-                **_OBJECT,
-                "properties": {
-                    "order_id": {"type": "string"},
-                    "reason": {"type": "string"},
-                    "damage_note": {"type": "string"},
-                },
-                "required": ["order_id"],
-            },
-            fn=check_eligible,
-        )
-    )
-    catalog.add(
-        Tool(
-            name="list_eligible",
-            description="Check refund eligibility for every order belonging to the customer.",
-            parameters={**_OBJECT, "properties": {"reason": {"type": "string"}}},
-            fn=list_eligible,
-        )
-    )
-    catalog.add(
-        Tool(
-            name="process_refund",
-            description="Issue a refund after eligibility has been confirmed.",
-            parameters={
-                **_OBJECT,
-                "properties": {
-                    "order_id": {"type": "string"},
-                    "reason": {"type": "string"},
-                    "damage_note": {"type": "string"},
-                },
-                "required": ["order_id"],
-            },
-            fn=process_refund,
-        )
-    )
-
-
-def _add_supervisor_tools(catalog: ToolCatalog, registry: Registry) -> None:
+def _add_supervisor_tools(catalog: ToolCatalog, registry: Registry, caller: AgentCaller) -> None:
     def search_agents(arguments: dict, ctx: RequestContext) -> dict:
         del ctx
         return {"agents": registry.search(arguments.get("query", ""))}
@@ -148,7 +56,25 @@ def _add_supervisor_tools(catalog: ToolCatalog, registry: Registry) -> None:
         agent = registry.get(arguments.get("agent_name", ""))
         if agent is None:
             return {"reply": "No specialist is registered under that name."}
-        return {"reply": agent.run(arguments.get("task", ""), ctx)}
+        ctx.db.commit()
+        result = caller.call(
+            agent.url,
+            {
+                "task": arguments.get("task", ""),
+                "customer_id": ctx.customer_id,
+                "tier": ctx.tier,
+                "trace_id": ctx.trace_id,
+                "session_id": ctx.session_id,
+                "prior_messages": ctx.prior_messages,
+                "memory_facts": ctx.memory_facts,
+            },
+        )
+        for step in result.get("steps") or []:
+            ctx.steps.append(step)
+        for name in result.get("agents") or []:
+            if name not in ctx.agents_used:
+                ctx.agents_used.append(name)
+        return {"reply": result.get("reply", "")}
 
     def remember(arguments: dict, ctx: RequestContext) -> dict:
         fact = (arguments.get("fact") or "").strip()
@@ -179,13 +105,10 @@ def _add_supervisor_tools(catalog: ToolCatalog, registry: Registry) -> None:
     catalog.add(
         Tool(
             name="delegate",
-            description="Hand the customer request to a specialist agent.",
+            description="Hand the customer request to a specialist agent at its registered URL.",
             parameters={
                 **_OBJECT,
-                "properties": {
-                    "agent_name": {"type": "string"},
-                    "task": {"type": "string"},
-                },
+                "properties": {"agent_name": {"type": "string"}, "task": {"type": "string"}},
                 "required": ["agent_name", "task"],
             },
             fn=delegate,

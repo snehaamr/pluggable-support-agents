@@ -1,8 +1,10 @@
 import logging
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
 from app.context import RequestContext
+from app.guard import inspect_payload
 from app.redact import redact
 
 
@@ -38,11 +40,21 @@ class ToolCatalog:
         if name not in allowed or name not in self._tools:
             return {"status": "error", "message": f"Tool '{name}' is not available to this agent."}
 
-        ctx.steps.append({"agent": ctx.current_agent, "tool": name})
+        started = time.perf_counter()
+        step = {"agent": ctx.current_agent, "tool": name, "status": "ok"}
+        ctx.steps.append(step)
         logger.info("trace_id=%s agent=%s tool=%s", ctx.trace_id, ctx.current_agent, name)
         try:
-            result = self._tools[name].fn(arguments or {}, ctx)
+            refusal = inspect_payload(arguments or {})
+            if refusal:
+                step["status"] = "blocked"
+                result = {"status": "blocked", "message": refusal}
+            else:
+                result = self._tools[name].fn(arguments or {}, ctx)
         except Exception as exc:
             logger.exception("tool %s failed", name)
+            step["status"] = "error"
             result = {"status": "error", "message": str(exc)}
+        finally:
+            step["duration_ms"] = round((time.perf_counter() - started) * 1000, 2)
         return redact(result)

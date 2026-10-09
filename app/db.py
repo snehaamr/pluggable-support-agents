@@ -63,6 +63,20 @@ class ChatMessage(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class TraceSpan(Base):
+    __tablename__ = "trace_spans"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    trace_id: Mapped[str] = mapped_column(String, index=True)
+    session_id: Mapped[str] = mapped_column(String, index=True)
+    customer_id: Mapped[str] = mapped_column(String, index=True)
+    sequence: Mapped[int] = mapped_column(nullable=False)
+    agent: Mapped[str] = mapped_column(String, nullable=False)
+    tool: Mapped[str] = mapped_column(String, nullable=False)
+    status: Mapped[str] = mapped_column(String, nullable=False)
+    duration_ms: Mapped[float] = mapped_column(nullable=False)
+
+
 class MemoryFact(Base):
     __tablename__ = "memory_facts"
 
@@ -88,8 +102,22 @@ def ensure_auth_columns(engine) -> None:
 
 
 def make_engine(database_url: str):
-    connect_args = {"check_same_thread": False} if database_url.startswith("sqlite") else {}
-    return create_engine(database_url, connect_args=connect_args, pool_pre_ping=True)
+    connect_args = {"check_same_thread": False, "timeout": 15} if database_url.startswith("sqlite") else {}
+    engine = create_engine(database_url, connect_args=connect_args, pool_pre_ping=True)
+    if database_url.startswith("sqlite"):
+        _enable_sqlite_wal(engine)
+    return engine
+
+
+def _enable_sqlite_wal(engine) -> None:
+    from sqlalchemy import event
+
+    @event.listens_for(engine, "connect")
+    def _pragmas(dbapi_connection, _record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA busy_timeout=5000")
+        cursor.close()
 
 
 def make_session_factory(engine):
