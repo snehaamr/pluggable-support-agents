@@ -52,6 +52,18 @@ class Refund(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class RefundReview(Base):
+    __tablename__ = "refund_reviews"
+
+    review_id: Mapped[str] = mapped_column(String, primary_key=True)
+    order_id: Mapped[str] = mapped_column(ForeignKey("orders.order_id"), unique=True)
+    customer_id: Mapped[str] = mapped_column(String, index=True)
+    reason: Mapped[str] = mapped_column(String, nullable=False)
+    status: Mapped[str] = mapped_column(String, nullable=False)
+    detail: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class ChatMessage(Base):
     __tablename__ = "messages"
 

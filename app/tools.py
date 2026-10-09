@@ -5,7 +5,7 @@ from decimal import Decimal
 from sqlalchemy import select
 
 from app.context import RequestContext
-from app.db import Order, Refund
+from app.db import Order, Refund, RefundReview
 from app.policy import evaluate, search_policy
 
 
@@ -76,6 +76,8 @@ def process_refund(arguments: dict, ctx: RequestContext) -> dict:
         }
 
     decision = _decide(order, ctx, arguments)
+    if decision["status"] == "needs_review":
+        return open_review(arguments, ctx)
     if decision["status"] != "eligible":
         decision["order_id"] = order.order_id
         return decision
@@ -100,6 +102,65 @@ def process_refund(arguments: dict, ctx: RequestContext) -> dict:
         "message": (
             f"Refund {refund.refund_id} approved for ${refund.amount:.2f}. "
             f"It should appear by {eta.isoformat()}."
+        ),
+    }
+
+
+def open_review(arguments: dict, ctx: RequestContext) -> dict:
+    order = _owned_order(ctx, arguments.get("order_id", ""))
+    if order is None:
+        return {"order_id": arguments.get("order_id", ""), "status": "not_found", "message": "Order not found."}
+
+    existing_refund = ctx.db.scalar(select(Refund).where(Refund.order_id == order.order_id))
+    if existing_refund is not None:
+        return {
+            "status": "already_refunded",
+            "order_id": order.order_id,
+            "refund_id": existing_refund.refund_id,
+            "message": f"Refund {existing_refund.refund_id} was already issued for {order.order_id}.",
+        }
+
+    existing = ctx.db.scalar(select(RefundReview).where(RefundReview.order_id == order.order_id))
+    if existing is not None:
+        return _review_payload(existing)
+
+    decision = _decide(order, ctx, arguments)
+    if decision["status"] != "needs_review":
+        decision["order_id"] = order.order_id
+        return decision
+
+    review = RefundReview(
+        review_id=f"REV-{order.order_id.removeprefix('ORD-')}-{uuid.uuid4().hex[:6].upper()}",
+        order_id=order.order_id,
+        customer_id=ctx.customer_id,
+        reason=(arguments.get("reason") or "customer request").strip(),
+        status="pending",
+        detail=decision["message"],
+        created_at=datetime.now(timezone.utc),
+    )
+    ctx.db.add(review)
+    ctx.db.flush()
+    return _review_payload(review)
+
+
+def review_status(arguments: dict, ctx: RequestContext) -> dict:
+    order_id = (arguments.get("order_id") or "").strip()
+    query = select(RefundReview).where(RefundReview.customer_id == ctx.customer_id)
+    if order_id:
+        query = query.where(RefundReview.order_id == order_id)
+    reviews = ctx.db.scalars(query.order_by(RefundReview.created_at)).all()
+    if not reviews:
+        return {"reviews": [], "message": "You have no refund reviews."}
+    return {"reviews": [_review_payload(review) for review in reviews]}
+
+
+def _review_payload(review: RefundReview) -> dict:
+    return {
+        "status": review.status,
+        "order_id": review.order_id,
+        "review_id": review.review_id,
+        "message": (
+            f"Review {review.review_id} for {review.order_id} is {review.status}. {review.detail}"
         ),
     }
 

@@ -1,6 +1,6 @@
 # pluggable-support-agents
 
-A customer-support backend with three agents. A supervisor receives the chat message, discovers a specialist, and delegates over HTTP. The Order agent listens on port 8001 and the Refund agent on port 8002. Tools are the only code that reads or writes orders, the return policy, and refunds.
+A customer-support backend with three processes. A supervisor receives the chat message, discovers a specialist, and delegates over HTTP. The Order agent listens on port 8001 and the Refund agent on port 8002. Stopping one specialist leaves the chat page and the other specialist running. Tools are the only code that reads or writes orders, the return policy, refunds, and refund reviews.
 
 The default model is deterministic, so the service runs locally with no API key. Set `MODEL_PROVIDER=openai` and point `MODEL_BASE_URL` at any OpenAI-compatible chat completions endpoint when you want a live model. The same agents, registry, and tools stay in place. Saved preferences and earlier turns in the session are sent with the next message, so a follow-up such as "refund that laptop" can resolve the order.
 
@@ -17,7 +17,7 @@ flowchart TD
     refundAgent --> gateway
     gateway --> orders[(Orders)]
     gateway --> policy[(Return policy sections)]
-    gateway --> refunds[(Refunds)]
+    gateway --> refunds[(Refunds and reviews)]
     supervisor --> traces[(Trace spans)]
 ```
 
@@ -35,9 +35,9 @@ flowchart TD
 |---|---|---|
 | Gold | 30 days from delivery | 100% of the purchase price |
 | Silver | 20 days from delivery | 75% of the purchase price |
-| Bronze | 15 days from delivery | Held for condition review |
+| Bronze | 15 days from delivery | Pending review, no automatic refund |
 
-Eligible statuses are `delivered`, `shipped`, and `return_requested`. A damage or defect claim needs a damage note. `process_refund` checks the rule again, so a refund cannot be written by skipping eligibility.
+Eligible statuses are `delivered`, `shipped`, and `return_requested`. A damage or defect claim needs a damage note. `process_refund` checks the rule again, so a refund cannot be written by skipping eligibility. A bronze order inside the window is saved as a pending review. The customer can ask for that review later. No refund amount is issued.
 
 ## Run
 
@@ -46,16 +46,24 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 pytest
-uvicorn app.main:app --reload
+uvicorn app.order_service:app --host 127.0.0.1 --port 8001
+uvicorn app.refund_service:app --host 127.0.0.1 --port 8002
+uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-Open [http://127.0.0.1:8000](http://127.0.0.1:8000) and log in. Starting the app also starts the Order agent on [http://127.0.0.1:8001](http://127.0.0.1:8001) and the Refund agent on [http://127.0.0.1:8002](http://127.0.0.1:8002). The chat page shows which agent ran each tool and how long that step took. `POST /chat` reads the customer from the login cookie, not from the request body.
+Run each `uvicorn` command in its own terminal. Open [http://127.0.0.1:8000](http://127.0.0.1:8000) and log in. The chat page shows which agent ran each tool and how long that step took. `POST /chat` reads the customer from the login cookie, not from the request body.
+
+To run one live-model conversation through an order lookup, a policy excerpt, and the input guard:
+
+```bash
+MODEL_API_KEY=... python scripts/live_conversation.py
+```
 
 | Username | Password | Tier | Sample order |
 |---|---|---|---|
 | `avery` | `gold-pass` | gold | `ORD-10001` laptop, delivered 10 days ago |
 | `jordan` | `silver-pass` | silver | `ORD-20001` headphones, delivered 8 days ago |
-| `sam` | `bronze-pass` | bronze | `ORD-30001` mug, delivered 3 days ago |
+| `sam` | `bronze-pass` | bronze | `ORD-30001` mug, delivered 3 days ago, held for review |
 
 ```bash
 curl -s -c /tmp/support.cookies localhost:8000/login \
@@ -86,4 +94,4 @@ Copy `.env.example` to `.env`.
 | `MODEL_API_KEY` | Bearer token for the live model |
 | `ORDER_AGENT_URL` | Address the supervisor uses for the Order agent. Defaults to `http://127.0.0.1:8001`. |
 | `REFUND_AGENT_URL` | Address the supervisor uses for the Refund agent. Defaults to `http://127.0.0.1:8002`. |
-| `START_AGENT_SERVICES` | When true, the main process starts both specialist servers. Tests set this to false and call the apps in process. |
+| `AGENT_TRANSPORT` | `http` calls the specialist URLs. Tests use `asgi` so they do not bind ports. |
