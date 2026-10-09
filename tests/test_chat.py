@@ -4,7 +4,7 @@ from sqlalchemy import select
 
 from app.config import Settings
 from app.context import RequestContext
-from app.db import Customer, MemoryFact, Refund
+from app.db import Customer, MemoryFact, Refund, RefundReview
 from app.main import create_app
 from app.planning import route_message
 
@@ -14,7 +14,7 @@ def client(tmp_path):
     settings = Settings(
         database_url=f"sqlite:///{tmp_path}/support.db",
         model_provider="deterministic",
-        start_agent_services=False,
+        agent_transport="asgi",
     )
     application = create_app(settings)
     with TestClient(application) as test_client:
@@ -256,6 +256,48 @@ def test_trace_waterfall_records_each_step_duration(client):
     assert spans[-1]["tool"] == "check_order_details"
 
 
+def test_bronze_refund_is_saved_as_a_review(client):
+    login(client, "sam", "bronze-pass")
+    opened = send(client, "Refund order ORD-30001")
+    body = opened.json()
+    assert "open_review" in [step["tool"] for step in body["steps"]]
+    assert "process_refund" not in [step["tool"] for step in body["steps"]]
+    assert "pending" in body["reply"].lower()
+    assert "REV-" in body["reply"]
+    db = client.app.state.session_factory()
+    try:
+        review = db.scalar(select(RefundReview).where(RefundReview.order_id == "ORD-30001"))
+        refund = db.scalar(select(Refund).where(Refund.order_id == "ORD-30001"))
+        assert review is not None
+        review_id = review.review_id
+        assert review.status == "pending"
+        assert review.customer_id == "CUST-123"
+        assert refund is None
+    finally:
+        db.close()
+
+    status = send(client, "What is the status of my refund review?", session_id=body["session_id"])
+    assert review_id in status.json()["reply"]
+    assert "review_status" in [step["tool"] for step in status.json()["steps"]]
+
+
+def test_chat_process_calls_specialists_over_http(tmp_path):
+    settings = Settings(
+        database_url=f"sqlite:///{tmp_path}/support.db",
+        model_provider="deterministic",
+        agent_transport="http",
+        order_agent_url="http://127.0.0.1:9",
+        refund_agent_url="http://127.0.0.1:9",
+        model_timeout_seconds=2,
+    )
+    with TestClient(create_app(settings)) as http_client:
+        login(http_client)
+        response = send(http_client, "What is the status of ORD-10001?")
+    body = response.json()
+    assert "could not be reached" in body["reply"]
+    assert "check_order_details" not in [step["tool"] for step in body["steps"]]
+
+
 def test_chat_page_offers_login(client):
     page = client.get("/")
     assert page.status_code == 200
@@ -298,6 +340,7 @@ def test_process_refund_refuses_an_ineligible_order(client):
         ("Refund order ORD-10001", "refund"),
         ("Which of my orders are eligible for a refund?", "refund"),
         ("What is the gold return window?", "refund"),
+        ("What is the status of my refund review?", "refund"),
         ("I prefer email for refund updates", None),
         ("I prefer email and what is the status of ORD-10001?", "order"),
     ],

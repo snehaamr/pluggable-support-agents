@@ -11,15 +11,56 @@ services:
       timeout: 5s
       retries: 20
 
-  api:
+  order:
     build: .
-    ports:
-      - "8000:8000"
-      - "8001:8001"
-      - "8002:8002"
-    environment:
+    command: ["uvicorn", "app.order_service:app", "--host", "0.0.0.0", "--port", "8001"]
+    environment: &app_env
       DATABASE_URL: postgresql+psycopg://support:support@db:5432/support
       MODEL_PROVIDER: deterministic
+      MODEL_NAME: gpt-4o-mini
+      MODEL_BASE_URL: https://api.openai.com/v1
+      MODEL_API_KEY: ${MODEL_API_KEY:-}
+    ports:
+      - "8001:8001"
     depends_on:
       db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=2)"]
+      interval: 2s
+      timeout: 5s
+      retries: 20
+
+  refund:
+    build: .
+    command: ["uvicorn", "app.refund_service:app", "--host", "0.0.0.0", "--port", "8002"]
+    environment:
+      <<: *app_env
+    ports:
+      - "8002:8002"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8002/health', timeout=2)"]
+      interval: 2s
+      timeout: 5s
+      retries: 20
+
+  api:
+    build: .
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      <<: *app_env
+      AGENT_TRANSPORT: http
+      ORDER_AGENT_URL: http://order:8001
+      REFUND_AGENT_URL: http://refund:8002
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      order:
+        condition: service_healthy
+      refund:
         condition: service_healthy

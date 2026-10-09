@@ -1,20 +1,31 @@
 import asyncio
+import time
+from contextlib import asynccontextmanager
 
 import httpx
 from fastapi import FastAPI
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import OperationalError
 
 from app.agents import Agent
 from app.catalog import Tool, ToolCatalog
 from app.config import Settings
 from app.context import RequestContext
-from app.db import make_engine, make_session_factory
+from app.db import Base, make_engine, make_session_factory
 from app.llm import build_model
-from app.tools import check_eligible, check_order_details, list_eligible, process_refund, refund_policy
+from app.tools import (
+    check_eligible,
+    check_order_details,
+    list_eligible,
+    open_review,
+    process_refund,
+    refund_policy,
+    review_status,
+)
 
 
 ORDER_DESCRIPTION = "Order lookup by id and listing a customer's orders."
-REFUND_DESCRIPTION = "Refund eligibility, return policy, and issuing refunds."
+REFUND_DESCRIPTION = "Refund eligibility, return policy, refund reviews, and issuing refunds."
 
 _OBJECT = {"type": "object", "additionalProperties": False}
 
@@ -93,10 +104,12 @@ def create_refund_app(settings: Settings) -> FastAPI:
         description=REFUND_DESCRIPTION,
         system_prompt=(
             "You are the Refund agent. Use refund_policy before deciding eligibility. "
-            "Call check_eligible before process_refund. Never invent a refund. "
-            "If the tool says the refund needs evidence or review, stop and say so."
+            "Call check_eligible before process_refund or open_review. Never invent a refund. "
+            "If check_eligible says needs_review, call open_review and do not call process_refund. "
+            "If the customer asks about an existing review, call review_status. "
+            "If the tool says the refund needs evidence, stop and say so."
         ),
-        tool_names=["refund_policy", "check_eligible", "list_eligible", "process_refund"],
+        tool_names=["refund_policy", "check_eligible", "list_eligible", "process_refund", "open_review", "review_status"],
     )
     return _service_app(settings, agent)
 
@@ -107,6 +120,7 @@ def _specialist(settings: Settings, catalog: ToolCatalog, name: str, description
         settings.model_name,
         settings.model_base_url,
         settings.model_api_key,
+        settings.model_timeout_seconds,
     )
     return Agent(
         name=name,
@@ -118,10 +132,29 @@ def _specialist(settings: Settings, catalog: ToolCatalog, name: str, description
     )
 
 
+def _create_tables(engine) -> None:
+    """Retry because several processes can create the same tables at startup."""
+    last_error: Exception | None = None
+    for attempt in range(15):
+        try:
+            Base.metadata.create_all(engine)
+            return
+        except OperationalError as exc:
+            last_error = exc
+            time.sleep(0.2 if attempt else 0.05)
+    raise RuntimeError("Database tables were not created") from last_error
+
+
 def _service_app(settings: Settings, agent: Agent) -> FastAPI:
     engine = make_engine(settings.database_url)
     session_factory = make_session_factory(engine)
-    app = FastAPI(title=agent.name)
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        _create_tables(engine)
+        yield
+
+    app = FastAPI(title=agent.name, lifespan=lifespan)
     app.state.agent = agent
     app.state.session_factory = session_factory
 
@@ -219,5 +252,32 @@ def _add_refund_tools(catalog: ToolCatalog) -> None:
                 "required": ["order_id"],
             },
             fn=process_refund,
+        )
+    )
+    catalog.add(
+        Tool(
+            name="open_review",
+            description="Record a pending refund review when the tier cannot be refunded automatically.",
+            parameters={
+                **_OBJECT,
+                "properties": {
+                    "order_id": {"type": "string"},
+                    "reason": {"type": "string"},
+                    "damage_note": {"type": "string"},
+                },
+                "required": ["order_id"],
+            },
+            fn=open_review,
+        )
+    )
+    catalog.add(
+        Tool(
+            name="review_status",
+            description="Look up pending refund reviews for the signed-in customer.",
+            parameters={
+                **_OBJECT,
+                "properties": {"order_id": {"type": "string"}},
+            },
+            fn=review_status,
         )
     )

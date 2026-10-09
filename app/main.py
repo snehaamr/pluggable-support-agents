@@ -1,11 +1,7 @@
 import logging
-import threading
 import time
 from contextlib import asynccontextmanager
-from urllib.parse import urlparse
 
-import httpx
-import uvicorn
 from fastapi import FastAPI
 from sqlalchemy.exc import OperationalError
 
@@ -26,32 +22,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     session_factory = make_session_factory(engine)
     order_app = create_order_app(settings)
     refund_app = create_refund_app(settings)
-    if settings.start_agent_services:
-        caller = HttpAgentCaller(settings.model_timeout_seconds)
-    else:
+    if settings.agent_transport == "asgi":
         caller = AsgiAgentCaller(
             {
                 settings.order_agent_url: order_app,
                 settings.refund_agent_url: refund_app,
             }
         )
+    elif settings.agent_transport == "http":
+        caller = HttpAgentCaller(settings.model_timeout_seconds)
+    else:
+        raise RuntimeError(f"Unknown AGENT_TRANSPORT '{settings.agent_transport}'")
     supervisor, registry, catalog = build_runtime(settings, caller)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         _prepare_database(engine, session_factory)
-        servers = []
-        if settings.start_agent_services:
-            servers = [
-                _start_service(order_app, settings.order_agent_url),
-                _start_service(refund_app, settings.refund_agent_url),
-            ]
-            _wait_until_ready(settings.order_agent_url)
-            _wait_until_ready(settings.refund_agent_url)
         yield
-        for server, thread in servers:
-            server.should_exit = True
-            thread.join(timeout=5)
 
     app = FastAPI(title="Pluggable Support Agents", lifespan=lifespan)
     app.state.settings = settings
@@ -80,35 +67,6 @@ def _prepare_database(engine, session_factory) -> None:
             last_error = exc
             time.sleep(1 if attempt else 0)
     raise RuntimeError("Database did not become ready") from last_error
-
-
-def _start_service(service_app: FastAPI, url: str):
-    parsed = urlparse(url)
-    config = uvicorn.Config(
-        service_app,
-        host="0.0.0.0",
-        port=parsed.port or 8001,
-        log_level="warning",
-        access_log=False,
-    )
-    server = uvicorn.Server(config)
-    server.install_signal_handlers = lambda: None
-    thread = threading.Thread(target=server.run, name=f"agent-{parsed.port}", daemon=True)
-    thread.start()
-    return server, thread
-
-
-def _wait_until_ready(url: str) -> None:
-    deadline = time.time() + 15
-    health = f"{url.rstrip('/')}/health"
-    while time.time() < deadline:
-        try:
-            response = httpx.get(health, timeout=0.5)
-            if response.status_code == 200:
-                return
-        except httpx.HTTPError:
-            time.sleep(0.1)
-    raise RuntimeError(f"Agent service did not start: {url}")
 
 
 app = create_app()

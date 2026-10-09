@@ -74,6 +74,12 @@ def plan_refund(messages: list[dict], ctx: RequestContext) -> ModelTurn:
             return ModelTurn(tool_calls=[ToolCall("list_eligible", {"reason": reason})])
         return ModelTurn(content=format_eligibility(last_payload(messages) or {}))
 
+    if _wants_review_status(user_text):
+        if "review_status" not in called:
+            arguments = {"order_id": order_id} if order_id else {}
+            return ModelTurn(tool_calls=[ToolCall("review_status", arguments)])
+        return ModelTurn(content=_review_reply(last_payload(messages) or {}))
+
     if _wants_refund_action(user_text, order_id):
         if not order_id:
             return ModelTurn(content="Which order should I refund? Send the order id, for example ORD-10001.")
@@ -92,6 +98,15 @@ def plan_refund(messages: list[dict], ctx: RequestContext) -> ModelTurn:
                 tool_calls=[
                     ToolCall(
                         "process_refund",
+                        {"order_id": order_id, "reason": reason, "damage_note": damage_note},
+                    )
+                ]
+            )
+        if decision.get("status") == "needs_review" and "open_review" not in called:
+            return ModelTurn(
+                tool_calls=[
+                    ToolCall(
+                        "open_review",
                         {"order_id": order_id, "reason": reason, "damage_note": damage_note},
                     )
                 ]
@@ -115,7 +130,7 @@ def route_message(text: str) -> str | None:
     )
     if preference_only:
         return None
-    if re.search(r"\b(refund|eligible|return policy|return window)\b", lower):
+    if re.search(r"\b(refund|eligible|return policy|return window|review)\b", lower):
         return "refund"
     if re.search(r"\b(order|orders|status|tracking)\b", lower):
         return "order"
@@ -201,6 +216,21 @@ def _is_eligibility_list(text: str) -> bool:
     return "eligible" in lower and bool(re.search(r"\b(which|all)\b", lower)) and not re.search(r"ORD-\d+", text)
 
 
+def _wants_review_status(text: str) -> bool:
+    return bool(re.search(r"\breview\b", text, re.I)) and not re.search(
+        r"\b(refund order|process a refund|want a refund|need a refund)\b",
+        text,
+        re.I,
+    )
+
+
+def _review_reply(payload: dict) -> str:
+    reviews = payload.get("reviews") or []
+    if reviews:
+        return " ".join(review.get("message") or "" for review in reviews).strip()
+    return payload.get("message") or "You have no refund reviews."
+
+
 def _wants_refund_action(text: str, order_id: str) -> bool:
     if re.search(r"\b(refund order|process a refund|want a refund|need a refund)\b", text, re.I):
         return True
@@ -209,7 +239,7 @@ def _wants_refund_action(text: str, order_id: str) -> bool:
 
 def _refund_reply(decision: dict) -> str:
     message = decision.get("message") or "I couldn't complete that refund."
-    if decision.get("status") == "approved":
+    if decision.get("status") in {"approved", "pending"}:
         return message
     order_id = decision.get("order_id")
     if order_id and not message.startswith(order_id):

@@ -10,6 +10,6 @@ class Settings(BaseSettings):
     model_timeout_seconds: float = 60.0
     order_agent_url: str = "http://127.0.0.1:8001"
     refund_agent_url: str = "http://127.0.0.1:8002"
-    start_agent_services: bool = True
+    agent_transport: str = "http"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")

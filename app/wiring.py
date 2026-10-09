@@ -24,6 +24,7 @@ def build_runtime(settings: Settings, caller: AgentCaller):
         settings.model_name,
         settings.model_base_url,
         settings.model_api_key,
+        settings.model_timeout_seconds,
     )
     registry = Registry()
     registry.register(RegisteredAgent("Order agent", ORDER_DESCRIPTION, settings.order_agent_url))

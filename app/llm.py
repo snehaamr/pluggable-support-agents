@@ -46,10 +46,11 @@ class DeterministicModel:
 
 
 class OpenAICompatibleModel:
-    def __init__(self, model_name: str, base_url: str, api_key: str) -> None:
+    def __init__(self, model_name: str, base_url: str, api_key: str, timeout: float) -> None:
         self.model_name = model_name
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
+        self.timeout = timeout
 
     def complete(
         self,
@@ -63,14 +64,16 @@ class OpenAICompatibleModel:
         del agent_name, context
         payload = {
             "model": self.model_name,
+            "temperature": 0,
             "messages": [{"role": "system", "content": system}, *_to_openai(messages)],
             "tools": [_tool_schema(tool) for tool in tools],
+            "tool_choice": "auto",
         }
         response = httpx.post(
             f"{self.base_url}/chat/completions",
             headers={"Authorization": f"Bearer {self.api_key}"},
             json=payload,
-            timeout=60.0,
+            timeout=self.timeout,
         )
         response.raise_for_status()
         message = response.json()["choices"][0]["message"]
@@ -82,13 +85,13 @@ class OpenAICompatibleModel:
         return ModelTurn(content=message.get("content"), tool_calls=tool_calls)
 
 
-def build_model(provider: str, model_name: str, base_url: str, api_key: str) -> LanguageModel:
+def build_model(provider: str, model_name: str, base_url: str, api_key: str, timeout: float = 60.0) -> LanguageModel:
     if provider == "deterministic":
         return DeterministicModel()
     if provider == "openai":
         if not api_key:
             raise RuntimeError("MODEL_API_KEY is required when MODEL_PROVIDER=openai")
-        return OpenAICompatibleModel(model_name, base_url, api_key)
+        return OpenAICompatibleModel(model_name, base_url, api_key, timeout)
     raise RuntimeError(f"Unknown MODEL_PROVIDER '{provider}'")
 
 
