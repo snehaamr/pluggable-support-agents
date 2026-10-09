@@ -64,6 +64,7 @@ def _add_supervisor_tools(catalog: ToolCatalog, registry: Registry, caller: Agen
                 "task": arguments.get("task", ""),
                 "customer_id": ctx.customer_id,
                 "tier": ctx.tier,
+                "role": ctx.role,
                 "trace_id": ctx.trace_id,
                 "session_id": ctx.session_id,
                 "prior_messages": ctx.prior_messages,

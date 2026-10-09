@@ -69,6 +69,13 @@ class Agent:
 
     def _system(self, ctx: RequestContext) -> str:
         lines = [self.system_prompt]
+        if ctx.role == "reviewer":
+            lines.append(
+                "The signed-in user is a reviewer. "
+                "For a refund review, call search_agents and delegate if you are the supervisor. "
+                "If you are the Refund agent, call list_reviews or decide_review. "
+                "Do not issue a refund except through decide_review."
+            )
         if ctx.memory_facts:
             lines.append("Customer preferences already saved:")
             lines.extend(f"- {fact}" for fact in ctx.memory_facts)

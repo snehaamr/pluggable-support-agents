@@ -64,6 +64,10 @@ def plan_order(messages: list[dict], ctx: RequestContext) -> ModelTurn:
 
 def plan_refund(messages: list[dict], ctx: RequestContext) -> ModelTurn:
     user_text = latest_user(messages)
+    if ctx.role == "reviewer":
+        return _plan_reviewer(messages)
+    if re.search(r"\b(approve|reject|deny)\b", user_text, re.I) and re.search(r"\breview\b", user_text, re.I):
+        return ModelTurn(content="A reviewer has to decide that refund.")
     called = tool_names(messages)
     order_id = referenced_order_id(messages, ctx)
     reason = "damaged on arrival" if re.search(r"damage|defect", user_text, re.I) else "customer request"
@@ -214,6 +218,46 @@ def format_eligibility(payload: dict) -> str:
 def _is_eligibility_list(text: str) -> bool:
     lower = text.lower()
     return "eligible" in lower and bool(re.search(r"\b(which|all)\b", lower)) and not re.search(r"ORD-\d+", text)
+
+
+def _plan_reviewer(messages: list[dict]) -> ModelTurn:
+    user_text = latest_user(messages)
+    called = tool_names(messages)
+    order_match = re.search(r"ORD-\d+", user_text)
+    order_id = order_match.group(0) if order_match else ""
+    if re.search(r"\b(approve|accept)\b", user_text, re.I):
+        decision = "approve"
+    elif re.search(r"\b(reject|deny|decline)\b", user_text, re.I):
+        decision = "reject"
+    else:
+        decision = ""
+
+    if decision:
+        if not order_id:
+            return ModelTurn(content="Which order should I decide? Send the order id, for example ORD-30001.")
+        if "decide_review" not in called:
+            arguments = {"order_id": order_id, "decision": decision}
+            amount = _review_amount(user_text)
+            if amount:
+                arguments["amount"] = amount
+            return ModelTurn(tool_calls=[ToolCall("decide_review", arguments)])
+        payload = last_payload(messages) or {}
+        return ModelTurn(content=payload.get("message") or "I couldn't decide that review.")
+
+    if re.search(r"\b(pending|waiting|which|list)\b", user_text, re.I):
+        if "list_reviews" not in called:
+            return ModelTurn(tool_calls=[ToolCall("list_reviews", {})])
+        return ModelTurn(content=_review_reply(last_payload(messages) or {}))
+
+    return ModelTurn(content="I can list pending reviews, or approve or reject one by order id.")
+
+
+def _review_amount(text: str) -> str:
+    found = re.search(r"\$\s*(\d+(?:\.\d{1,2})?)", text)
+    if found:
+        return found.group(1)
+    found = re.search(r"\bfor\s+(\d+\.\d{2})\b", text, re.I)
+    return found.group(1) if found else ""
 
 
 def _wants_review_status(text: str) -> bool:

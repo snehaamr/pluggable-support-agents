@@ -14,6 +14,8 @@ DEMO_CUSTOMERS = (
     ("CUST-123", "sam", "bronze-pass", "Sam Patel", "bronze"),
 )
 
+REVIEWER = ("STAFF-001", "riley", "review-pass", "Riley Morgan")
+
 
 def seed(db: Session, today: date | None = None) -> None:
     existing = db.scalar(select(Customer.id).limit(1))
@@ -32,6 +34,7 @@ def _customers() -> list[Customer]:
             password_hash=hash_password(password),
             name=name,
             tier=tier,
+            role="customer",
         )
         for customer_id, username, password, name, tier in DEMO_CUSTOMERS
     ]
@@ -50,6 +53,21 @@ def _backfill_logins(db: Session) -> None:
             customer.name = name
         if not customer.tier:
             customer.tier = tier
+        if not customer.role:
+            customer.role = "customer"
+    reviewer_id, username, password, name = REVIEWER
+    reviewer = db.get(Customer, reviewer_id)
+    if reviewer is None:
+        db.add(
+            Customer(
+                id=reviewer_id,
+                username=username,
+                password_hash=hash_password(password),
+                name=name,
+                tier="reviewer",
+                role="reviewer",
+            )
+        )
 
 
 def _load_orders(db: Session, today: date) -> None:

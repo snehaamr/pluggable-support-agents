@@ -37,7 +37,7 @@ flowchart TD
 | Silver | 20 days from delivery | 75% of the purchase price |
 | Bronze | 15 days from delivery | Pending review, no automatic refund |
 
-Eligible statuses are `delivered`, `shipped`, and `return_requested`. A damage or defect claim needs a damage note. `process_refund` checks the rule again, so a refund cannot be written by skipping eligibility. A bronze order inside the window is saved as a pending review. The customer can ask for that review later. No refund amount is issued.
+Eligible statuses are `delivered`, `shipped`, and `return_requested`. A damage or defect claim needs a damage note. `process_refund` checks the rule again, so a refund cannot be written by skipping eligibility. A bronze order inside the window is saved as a pending review. The customer can ask about that review later. Riley can approve it for a specific amount or reject it. A customer cannot decide their own review.
 
 ## Run
 
@@ -64,6 +64,7 @@ MODEL_API_KEY=... python scripts/live_conversation.py
 | `avery` | `gold-pass` | gold | `ORD-10001` laptop, delivered 10 days ago |
 | `jordan` | `silver-pass` | silver | `ORD-20001` headphones, delivered 8 days ago |
 | `sam` | `bronze-pass` | bronze | `ORD-30001` mug, delivered 3 days ago, held for review |
+| `riley` | `review-pass` | reviewer | Decides pending reviews |
 
 ```bash
 curl -s -c /tmp/support.cookies localhost:8000/login \

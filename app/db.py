@@ -17,6 +17,7 @@ class Customer(Base):
     password_hash: Mapped[str] = mapped_column(String, nullable=False)
     name: Mapped[str] = mapped_column(String, nullable=False)
     tier: Mapped[str] = mapped_column(String, nullable=False)
+    role: Mapped[str] = mapped_column(String, nullable=False, default="customer")
 
 
 class AuthSession(Base):
@@ -111,6 +112,9 @@ def ensure_auth_columns(engine) -> None:
             connection.execute(text("ALTER TABLE customers ADD COLUMN username VARCHAR"))
         if "password_hash" not in names:
             connection.execute(text("ALTER TABLE customers ADD COLUMN password_hash VARCHAR"))
+        if "role" not in names:
+            connection.execute(text("ALTER TABLE customers ADD COLUMN role VARCHAR"))
+            connection.execute(text("UPDATE customers SET role = 'customer' WHERE role IS NULL"))
 
 
 def make_engine(database_url: str):
