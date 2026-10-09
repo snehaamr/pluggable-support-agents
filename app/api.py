@@ -172,6 +172,7 @@ def chat(body: ChatIn, request: Request):
             trace_id=trace_id,
             customer_id=customer.id,
             tier=customer.tier,
+            role=customer.role or "customer",
             session_id=session_id,
             db=db,
             prior_messages=[

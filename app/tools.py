@@ -82,28 +82,12 @@ def process_refund(arguments: dict, ctx: RequestContext) -> dict:
         decision["order_id"] = order.order_id
         return decision
 
-    eta = date.today() + timedelta(days=5)
-    refund = Refund(
-        refund_id=f"REF-{order.order_id.removeprefix('ORD-')}-{uuid.uuid4().hex[:6].upper()}",
-        order_id=order.order_id,
-        amount=Decimal(decision["amount"]),
-        reason=(arguments.get("reason") or "customer request").strip(),
-        eta=eta,
-        created_at=datetime.now(timezone.utc),
+    return _issue_refund(
+        ctx,
+        order,
+        Decimal(decision["amount"]),
+        (arguments.get("reason") or "customer request").strip(),
     )
-    ctx.db.add(refund)
-    ctx.db.flush()
-    return {
-        "status": "approved",
-        "order_id": order.order_id,
-        "refund_id": refund.refund_id,
-        "amount": f"{refund.amount:.2f}",
-        "eta": eta.isoformat(),
-        "message": (
-            f"Refund {refund.refund_id} approved for ${refund.amount:.2f}. "
-            f"It should appear by {eta.isoformat()}."
-        ),
-    }
 
 
 def open_review(arguments: dict, ctx: RequestContext) -> dict:
@@ -143,6 +127,93 @@ def open_review(arguments: dict, ctx: RequestContext) -> dict:
     return _review_payload(review)
 
 
+def decide_review(arguments: dict, ctx: RequestContext) -> dict:
+    if ctx.role != "reviewer":
+        return {"status": "forbidden", "message": "Only a reviewer can decide a refund review."}
+
+    order_id = (arguments.get("order_id") or "").strip()
+    review = ctx.db.scalar(select(RefundReview).where(RefundReview.order_id == order_id))
+    if review is None:
+        return {"status": "not_found", "order_id": order_id, "message": f"There is no refund review for {order_id}."}
+    if review.status != "pending":
+        return _review_payload(review)
+
+    decision = (arguments.get("decision") or "").strip().lower()
+    if decision == "reject":
+        review.status = "rejected"
+        review.detail = "A reviewer rejected this refund."
+        ctx.db.flush()
+        return _review_payload(review)
+    if decision != "approve":
+        return {
+            "status": "pending",
+            "order_id": order_id,
+            "message": f"Review {review.review_id} is still pending. Say approve or reject.",
+        }
+
+    amount_text = (arguments.get("amount") or "").strip()
+    if not amount_text:
+        return {
+            "status": "pending",
+            "order_id": order_id,
+            "review_id": review.review_id,
+            "message": f"Review {review.review_id} is still pending. Include the refund amount.",
+        }
+    order = ctx.db.get(Order, order_id)
+    try:
+        amount = Decimal(amount_text).quantize(Decimal("0.01"))
+    except Exception:
+        return {"status": "pending", "order_id": order_id, "message": "The refund amount needs to be a number, for example 10.00."}
+    if order is None or amount <= 0 or amount > Decimal(order.total_amount):
+        limit = f"{Decimal(order.total_amount):.2f}" if order is not None else "0.00"
+        return {
+            "status": "pending",
+            "order_id": order_id,
+            "message": f"The amount must be greater than 0 and no more than ${limit}.",
+        }
+
+    existing_refund = ctx.db.scalar(select(Refund).where(Refund.order_id == order.order_id))
+    if existing_refund is not None:
+        review.status = "approved"
+        review.detail = f"Refund {existing_refund.refund_id} was already issued for {order.order_id}."
+        ctx.db.flush()
+        return _review_payload(review)
+
+    issued = _issue_refund(ctx, order, amount, review.reason or "customer request")
+    review.status = "approved"
+    review.detail = issued["message"]
+    ctx.db.flush()
+    payload = _review_payload(review)
+    payload["refund_id"] = issued["refund_id"]
+    payload["amount"] = issued["amount"]
+    return payload
+
+
+def list_reviews(arguments: dict, ctx: RequestContext) -> dict:
+    del arguments
+    if ctx.role != "reviewer":
+        return {"reviews": [], "message": "Only a reviewer can list refund reviews."}
+    reviews = ctx.db.scalars(
+        select(RefundReview).where(RefundReview.status == "pending").order_by(RefundReview.created_at)
+    ).all()
+    if not reviews:
+        return {"reviews": [], "message": "There are no pending refund reviews."}
+    rows = []
+    for review in reviews:
+        order = ctx.db.get(Order, review.order_id)
+        product = order.product_name if order is not None else "item"
+        rows.append(
+            {
+                "review_id": review.review_id,
+                "order_id": review.order_id,
+                "customer_id": review.customer_id,
+                "product_name": product,
+                "message": f"{review.order_id} ({product}) for {review.customer_id} is pending as {review.review_id}.",
+            }
+        )
+    return {"reviews": rows}
+
+
 def review_status(arguments: dict, ctx: RequestContext) -> dict:
     order_id = (arguments.get("order_id") or "").strip()
     query = select(RefundReview).where(RefundReview.customer_id == ctx.customer_id)
@@ -161,6 +232,31 @@ def _review_payload(review: RefundReview) -> dict:
         "review_id": review.review_id,
         "message": (
             f"Review {review.review_id} for {review.order_id} is {review.status}. {review.detail}"
+        ),
+    }
+
+
+def _issue_refund(ctx: RequestContext, order: Order, amount: Decimal, reason: str) -> dict:
+    eta = date.today() + timedelta(days=5)
+    refund = Refund(
+        refund_id=f"REF-{order.order_id.removeprefix('ORD-')}-{uuid.uuid4().hex[:6].upper()}",
+        order_id=order.order_id,
+        amount=amount,
+        reason=reason,
+        eta=eta,
+        created_at=datetime.now(timezone.utc),
+    )
+    ctx.db.add(refund)
+    ctx.db.flush()
+    return {
+        "status": "approved",
+        "order_id": order.order_id,
+        "refund_id": refund.refund_id,
+        "amount": f"{refund.amount:.2f}",
+        "eta": eta.isoformat(),
+        "message": (
+            f"Refund {refund.refund_id} approved for ${refund.amount:.2f}. "
+            f"It should appear by {eta.isoformat()}."
         ),
     }
 

@@ -10,6 +10,7 @@ class RequestContext:
     tier: str
     session_id: str
     db: Session
+    role: str = "customer"
     current_agent: str = ""
     agents_used: list[str] = field(default_factory=list)
     steps: list[dict] = field(default_factory=list)

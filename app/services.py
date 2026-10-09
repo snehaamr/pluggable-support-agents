@@ -16,7 +16,9 @@ from app.llm import build_model
 from app.tools import (
     check_eligible,
     check_order_details,
+    decide_review,
     list_eligible,
+    list_reviews,
     open_review,
     process_refund,
     refund_policy,
@@ -34,6 +36,7 @@ class RunIn(BaseModel):
     task: str
     customer_id: str
     tier: str
+    role: str = "customer"
     trace_id: str
     session_id: str
     prior_messages: list[dict] = Field(default_factory=list)
@@ -107,9 +110,19 @@ def create_refund_app(settings: Settings) -> FastAPI:
             "Call check_eligible before process_refund or open_review. Never invent a refund. "
             "If check_eligible says needs_review, call open_review and do not call process_refund. "
             "If the customer asks about an existing review, call review_status. "
+            "A reviewer uses list_reviews and decide_review. Customers cannot decide a review. "
             "If the tool says the refund needs evidence, stop and say so."
         ),
-        tool_names=["refund_policy", "check_eligible", "list_eligible", "process_refund", "open_review", "review_status"],
+        tool_names=[
+            "refund_policy",
+            "check_eligible",
+            "list_eligible",
+            "process_refund",
+            "open_review",
+            "review_status",
+            "decide_review",
+            "list_reviews",
+        ],
     )
     return _service_app(settings, agent)
 
@@ -170,6 +183,7 @@ def _service_app(settings: Settings, agent: Agent) -> FastAPI:
                 trace_id=body.trace_id,
                 customer_id=body.customer_id,
                 tier=body.tier,
+                role=body.role,
                 session_id=body.session_id,
                 db=db,
                 prior_messages=body.prior_messages,
@@ -279,5 +293,29 @@ def _add_refund_tools(catalog: ToolCatalog) -> None:
                 "properties": {"order_id": {"type": "string"}},
             },
             fn=review_status,
+        )
+    )
+    catalog.add(
+        Tool(
+            name="decide_review",
+            description="Approve or reject a pending refund review. Approving requires an amount and issues the refund.",
+            parameters={
+                **_OBJECT,
+                "properties": {
+                    "order_id": {"type": "string"},
+                    "decision": {"type": "string"},
+                    "amount": {"type": "string"},
+                },
+                "required": ["order_id", "decision"],
+            },
+            fn=decide_review,
+        )
+    )
+    catalog.add(
+        Tool(
+            name="list_reviews",
+            description="List pending refund reviews for a reviewer.",
+            parameters={**_OBJECT, "properties": {}},
+            fn=list_reviews,
         )
     )

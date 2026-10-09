@@ -16,7 +16,8 @@ from app.main import create_app
 
 
 def main() -> int:
-    api_key = os.environ.get("MODEL_API_KEY", "").strip()
+    configured = Settings()
+    api_key = (os.environ.get("MODEL_API_KEY") or configured.model_api_key).strip()
     if not api_key:
         print("Set MODEL_API_KEY to run a live model conversation.", file=sys.stderr)
         return 2
@@ -26,8 +27,8 @@ def main() -> int:
             database_url=f"sqlite:///{Path(tmp) / 'live.db'}",
             model_provider="openai",
             model_api_key=api_key,
-            model_base_url=os.environ.get("MODEL_BASE_URL", "https://api.openai.com/v1"),
-            model_name=os.environ.get("MODEL_NAME", "gpt-4o-mini"),
+            model_base_url=os.environ.get("MODEL_BASE_URL") or configured.model_base_url,
+            model_name=os.environ.get("MODEL_NAME") or configured.model_name,
             agent_transport="asgi",
         )
         with TestClient(create_app(settings)) as client:

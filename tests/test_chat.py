@@ -281,6 +281,76 @@ def test_bronze_refund_is_saved_as_a_review(client):
     assert "review_status" in [step["tool"] for step in status.json()["steps"]]
 
 
+def test_customer_cannot_decide_a_review(client):
+    login(client, "sam", "bronze-pass")
+    send(client, "Refund order ORD-30001")
+    response = send(client, "Approve the review for ORD-30001 for $10.00")
+    body = response.json()
+    assert "reviewer" in body["reply"].lower()
+    assert "decide_review" not in [step["tool"] for step in body["steps"]]
+    db = client.app.state.session_factory()
+    try:
+        review = db.scalar(select(RefundReview).where(RefundReview.order_id == "ORD-30001"))
+        refund = db.scalar(select(Refund).where(Refund.order_id == "ORD-30001"))
+        assert review.status == "pending"
+        assert refund is None
+    finally:
+        db.close()
+
+
+def test_reviewer_can_approve_a_pending_review(client):
+    login(client, "sam", "bronze-pass")
+    send(client, "Refund order ORD-30001")
+    login(client, "riley", "review-pass")
+    waiting = send(client, "Approve the review for ORD-30001")
+    assert "amount" in waiting.json()["reply"].lower()
+    decided = send(client, "Approve the review for ORD-30001 for $10.00")
+    body = decided.json()
+    assert "decide_review" in [step["tool"] for step in body["steps"]]
+    assert "10.00" in body["reply"]
+    assert "approved" in body["reply"].lower()
+    db = client.app.state.session_factory()
+    try:
+        review = db.scalar(select(RefundReview).where(RefundReview.order_id == "ORD-30001"))
+        refund = db.scalar(select(Refund).where(Refund.order_id == "ORD-30001"))
+        assert review.status == "approved"
+        assert f"{refund.amount:.2f}" == "10.00"
+    finally:
+        db.close()
+    login(client, "sam", "bronze-pass")
+    status = send(client, "What is the status of my refund review?")
+    assert "approved" in status.json()["reply"].lower()
+    assert "10.00" in status.json()["reply"]
+
+
+def test_reviewer_can_reject_a_pending_review(client):
+    login(client, "sam", "bronze-pass")
+    send(client, "Refund order ORD-30001")
+    login(client, "riley", "review-pass")
+    decided = send(client, "Reject the review for ORD-30001")
+    assert "rejected" in decided.json()["reply"].lower()
+    assert "decide_review" in [step["tool"] for step in decided.json()["steps"]]
+    db = client.app.state.session_factory()
+    try:
+        review = db.scalar(select(RefundReview).where(RefundReview.order_id == "ORD-30001"))
+        refund = db.scalar(select(Refund).where(Refund.order_id == "ORD-30001"))
+        assert review.status == "rejected"
+        assert refund is None
+    finally:
+        db.close()
+
+
+def test_reviewer_can_list_pending_reviews(client):
+    login(client, "sam", "bronze-pass")
+    send(client, "Refund order ORD-30001")
+    login(client, "riley", "review-pass")
+    listed = send(client, "Which refund reviews are pending?")
+    body = listed.json()
+    assert "list_reviews" in [step["tool"] for step in body["steps"]]
+    assert "ORD-30001" in body["reply"]
+    assert "Mug" in body["reply"]
+
+
 def test_chat_process_calls_specialists_over_http(tmp_path):
     settings = Settings(
         database_url=f"sqlite:///{tmp_path}/support.db",
@@ -305,6 +375,7 @@ def test_chat_page_offers_login(client):
     assert "avery" in page.text
     assert "jordan" in page.text
     assert "sam" in page.text
+    assert "riley" in page.text
 
 
 def test_process_refund_refuses_an_ineligible_order(client):
