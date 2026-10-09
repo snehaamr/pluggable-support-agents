@@ -1,4 +1,4 @@
-"""Run one live-model conversation through the guard, an order lookup, and a policy excerpt.
+"""Run one live-model conversation through the guard, an order lookup, a policy excerpt, and a review decision.
 
 Requires MODEL_API_KEY. MODEL_BASE_URL and MODEL_NAME are optional.
 The specialists are called in process so this does not bind ports.
@@ -10,8 +10,10 @@ import tempfile
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 from app.config import Settings
+from app.db import Refund, RefundReview
 from app.main import create_app
 
 
@@ -69,11 +71,61 @@ def main() -> int:
             _expect(blocked_body["steps"][0]["status"] == "blocked", blocked_body)
             _expect("search_agents" not in _tools(blocked_body), blocked_body)
 
+            sam = client.post("/login", json={"username": "sam", "password": "bronze-pass"})
+            _expect(sam.status_code == 200, sam.text)
+            opened = client.post("/chat", json={"message": "Refund order ORD-30001"})
+            opened_body = opened.json()
+            _expect(opened.status_code == 200, opened.text)
+            _expect(
+                "open_review" in _tools(opened_body) or "process_refund" in _tools(opened_body),
+                opened_body,
+            )
+            review_status, refund_amount = _stored(client, "ORD-30001")
+            _expect(review_status == "pending", opened_body)
+            _expect(refund_amount is None, opened_body)
+
+            riley = client.post("/login", json={"username": "riley", "password": "review-pass"})
+            _expect(riley.status_code == 200, riley.text)
+            listed = client.post("/chat", json={"message": "Which refund reviews are pending?"})
+            listed_body = listed.json()
+            _expect("list_reviews" in _tools(listed_body), listed_body)
+            _expect("ORD-30001" in listed_body["reply"], listed_body)
+
+            decided = client.post(
+                "/chat",
+                json={
+                    "message": "Approve the review for ORD-30001 for $10.00",
+                    "session_id": listed_body["session_id"],
+                },
+            )
+            decided_body = decided.json()
+            _expect("decide_review" in _tools(decided_body), decided_body)
+            _expect("10.00" in decided_body["reply"], decided_body)
+            _expect("approved" in decided_body["reply"].lower(), decided_body)
+            review_status, refund_amount = _stored(client, "ORD-30001")
+            _expect(review_status == "approved", decided_body)
+            _expect(refund_amount == "10.00", decided_body)
+
     print("Live conversation passed.")
     print(f"Order: {order_body['reply']}")
     print(f"Policy: {policy_body['reply']}")
     print(f"Guard: {blocked_body['reply']}")
+    print(f"Review opened: {opened_body['reply']}")
+    print(f"Pending: {listed_body['reply']}")
+    print(f"Decision: {decided_body['reply']}")
     return 0
+
+
+def _stored(client: TestClient, order_id: str) -> tuple[str | None, str | None]:
+    db = client.app.state.session_factory()
+    try:
+        review = db.scalar(select(RefundReview).where(RefundReview.order_id == order_id))
+        refund = db.scalar(select(Refund).where(Refund.order_id == order_id))
+        status = review.status if review is not None else None
+        amount = f"{refund.amount:.2f}" if refund is not None else None
+        return status, amount
+    finally:
+        db.close()
 
 
 def _tools(body: dict) -> list[str]:
