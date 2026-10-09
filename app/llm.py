@@ -17,6 +17,7 @@ class LanguageModel(Protocol):
         messages: list[dict],
         tools: list[dict],
         context: RequestContext,
+        force_tool: bool = False,
     ) -> ModelTurn: ...
 
 
@@ -34,8 +35,9 @@ class DeterministicModel:
         messages: list[dict],
         tools: list[dict],
         context: RequestContext,
+        force_tool: bool = False,
     ) -> ModelTurn:
-        del system, tools
+        del system, tools, force_tool
         if agent_name == "Supervisor":
             return plan_supervisor(messages, context)
         if agent_name == "Order agent":
@@ -60,6 +62,7 @@ class OpenAICompatibleModel:
         messages: list[dict],
         tools: list[dict],
         context: RequestContext,
+        force_tool: bool = False,
     ) -> ModelTurn:
         del agent_name, context
         payload = {
@@ -67,7 +70,7 @@ class OpenAICompatibleModel:
             "temperature": 0,
             "messages": [{"role": "system", "content": system}, *_to_openai(messages)],
             "tools": [_tool_schema(tool) for tool in tools],
-            "tool_choice": "auto",
+            "tool_choice": "required" if force_tool and tools else "auto",
         }
         response = httpx.post(
             f"{self.base_url}/chat/completions",

@@ -56,9 +56,10 @@ def main() -> int:
             )
             policy_body = policy.json()
             _expect("refund_policy" in _tools(policy_body), policy_body)
-            _expect("30-day" in policy_body["reply"], policy_body)
-            _expect("15-day" not in policy_body["reply"], policy_body)
-            _expect("within 5 days" not in policy_body["reply"], policy_body)
+            policy_reply = policy_body["reply"].lower()
+            _expect("30" in policy_reply and "gold" in policy_reply, policy_body)
+            _expect("15" not in policy_reply, policy_body)
+            _expect("5 day" not in policy_reply, policy_body)
 
             blocked = client.post(
                 "/chat",

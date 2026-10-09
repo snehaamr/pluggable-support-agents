@@ -106,7 +106,9 @@ def create_refund_app(settings: Settings) -> FastAPI:
         name="Refund agent",
         description=REFUND_DESCRIPTION,
         system_prompt=(
-            "You are the Refund agent. Use refund_policy before deciding eligibility. "
+            "You are the Refund agent. A return window or policy question must call refund_policy, "
+            "and the reply must use only the text that tool returns. "
+            "Use refund_policy before deciding eligibility. "
             "Call check_eligible before process_refund or open_review. Never invent a refund. "
             "If check_eligible says needs_review, call open_review and do not call process_refund. "
             "If the customer asks about an existing review, call review_status. "
