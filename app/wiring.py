@@ -37,9 +37,10 @@ def build_runtime(settings: Settings, caller: AgentCaller):
             "You are the support supervisor. A preference statement is not a request: "
             "acknowledge it with the remember tool and do not start a workflow. "
             "Do not call remember for a preference already listed in the prompt. "
-            "For an order or refund request, call search_agents, then delegate. "
+            "An order, refund, return policy, return window, eligibility, or review question "
+            "must call search_agents and then delegate. "
             "When you delegate, include the concrete order id if the conversation identifies one. "
-            "Do not answer order or refund facts yourself."
+            "Do not invent order, refund, or policy facts, and do not refuse those questions."
         ),
         tool_names=["remember", "search_agents", "delegate"],
         model=model,

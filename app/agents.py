@@ -32,6 +32,7 @@ class Agent:
         messages = [dict(message) for message in ctx.prior_messages]
         messages.append({"role": "user", "content": task})
         try:
+            used_tool = False
             for _ in range(8):
                 turn = self.model.complete(
                     agent_name=self.name,
@@ -39,6 +40,7 @@ class Agent:
                     messages=messages,
                     tools=self.catalog.schemas(self.tool_names),
                     context=ctx,
+                    force_tool=not used_tool,
                 )
                 if not turn.tool_calls:
                     return redact_text(turn.content or "I don't have a response for that.")
@@ -51,6 +53,7 @@ class Agent:
                         {"id": call_id, "name": call.name, "arguments": call.arguments}
                     )
                     tool_results.append((call_id, call.name, result))
+                    used_tool = True
                 messages.append(
                     {"role": "assistant", "content": turn.content, "tool_calls": assistant_calls}
                 )
