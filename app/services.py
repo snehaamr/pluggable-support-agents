@@ -25,12 +25,13 @@ from app.tools import (
     process_refund,
     record_damage,
     refund_policy,
+    refund_status,
     review_status,
 )
 
 
 ORDER_DESCRIPTION = "Order lookup by id and listing a customer's orders."
-REFUND_DESCRIPTION = "Refund eligibility, return policy, damage claims, refund reviews, and issuing refunds."
+REFUND_DESCRIPTION = "Refund eligibility, return policy, damage claims, refund reviews, issued refunds, and issuing refunds."
 
 _OBJECT = {"type": "object", "additionalProperties": False}
 
@@ -109,7 +110,11 @@ def create_refund_app(settings: Settings) -> FastAPI:
         name="Refund agent",
         description=REFUND_DESCRIPTION,
         system_prompt=(
-            "You are the Refund agent. A return window or policy question must call refund_policy, "
+            "You are the Refund agent. "
+            "If the customer asks where a refund is, when it will appear, or for the status of a refund, "
+            "call refund_status first. That is not a policy question and not a new refund. "
+            "Do not call refund_policy, check_eligible, or process_refund for it. "
+            "A return window or policy question must call refund_policy, "
             "and the reply must use only the text that tool returns. "
             "Use refund_policy before deciding eligibility. "
             "Call check_eligible before process_refund or open_review. Never invent a refund. "
@@ -132,6 +137,7 @@ def create_refund_app(settings: Settings) -> FastAPI:
             "record_damage",
             "add_damage_note",
             "damage_status",
+            "refund_status",
             "review_status",
             "decide_review",
             "list_reviews",
@@ -337,6 +343,17 @@ def _add_refund_tools(catalog: ToolCatalog) -> None:
                 "properties": {"order_id": {"type": "string"}},
             },
             fn=damage_status,
+        )
+    )
+    catalog.add(
+        Tool(
+            name="refund_status",
+            description="Look up an issued refund, including its id, amount, and the date it should appear.",
+            parameters={
+                **_OBJECT,
+                "properties": {"order_id": {"type": "string"}},
+            },
+            fn=refund_status,
         )
     )
     catalog.add(

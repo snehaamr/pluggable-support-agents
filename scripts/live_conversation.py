@@ -1,4 +1,4 @@
-"""Run one live-model conversation through the guard, an order lookup, a policy excerpt, a damage claim, and a review decision.
+"""Run one live-model conversation through the guard, an order lookup, a policy excerpt, a damage claim, a refund lookup, and a review decision.
 
 Requires MODEL_API_KEY. MODEL_BASE_URL and MODEL_NAME are optional.
 The specialists are called in process so this does not bind ports.
@@ -99,6 +99,20 @@ def main() -> int:
             _expect(claim_status == "noted", noted_body)
             _expect("cracked" in (claim_note or "").lower(), noted_body)
             _expect(_stored(client, "ORD-10005")[1] == "649.99", noted_body)
+            refund_id = _refund_id(client, "ORD-10005")
+
+            asked = client.post(
+                "/chat",
+                json={
+                    "message": "When will my refund for ORD-10005 appear?",
+                    "session_id": noted_body["session_id"],
+                },
+            )
+            asked_body = asked.json()
+            _expect("refund_status" in _tools(asked_body), asked_body)
+            _expect("process_refund" not in _tools(asked_body), asked_body)
+            _expect(refund_id in asked_body["reply"], asked_body)
+            _expect("649.99" in asked_body["reply"], asked_body)
 
             sam = client.post("/login", json={"username": "sam", "password": "bronze-pass"})
             _expect(sam.status_code == 200, sam.text)
@@ -141,10 +155,20 @@ def main() -> int:
     print(f"Guard: {blocked_body['reply']}")
     print(f"Damage claim: {damaged_body['reply']}")
     print(f"Damage note: {noted_body['reply']}")
+    print(f"Refund lookup: {asked_body['reply']}")
     print(f"Review opened: {opened_body['reply']}")
     print(f"Pending: {listed_body['reply']}")
     print(f"Decision: {decided_body['reply']}")
     return 0
+
+
+def _refund_id(client: TestClient, order_id: str) -> str:
+    db = client.app.state.session_factory()
+    try:
+        refund = db.scalar(select(Refund).where(Refund.order_id == order_id))
+        return "" if refund is None else refund.refund_id
+    finally:
+        db.close()
 
 
 def _claim(client: TestClient, order_id: str) -> tuple[str | None, str | None]:

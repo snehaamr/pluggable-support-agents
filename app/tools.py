@@ -316,6 +316,48 @@ def list_reviews(arguments: dict, ctx: RequestContext) -> dict:
     return {"reviews": rows}
 
 
+def refund_status(arguments: dict, ctx: RequestContext) -> dict:
+    order_id = (arguments.get("order_id") or "").strip()
+    if order_id:
+        order = _owned_order(ctx, order_id)
+        if order is None:
+            return {"refunds": [], "order_id": order_id, "status": "not_found", "message": "Order not found."}
+        refund = ctx.db.scalar(select(Refund).where(Refund.order_id == order.order_id))
+        if refund is None:
+            return {
+                "refunds": [],
+                "order_id": order.order_id,
+                "message": f"There is no refund for {order.order_id}.",
+            }
+        return {"refunds": [_refund_status_payload(refund)]}
+
+    refunds = ctx.db.scalars(
+        select(Refund)
+        .join(Order, Refund.order_id == Order.order_id)
+        .where(Order.customer_id == ctx.customer_id)
+        .order_by(Refund.created_at)
+    ).all()
+    if not refunds:
+        return {"refunds": [], "message": "You have no refunds."}
+    return {"refunds": [_refund_status_payload(refund) for refund in refunds]}
+
+
+def _refund_status_payload(refund: Refund) -> dict:
+    amount = f"{Decimal(refund.amount):.2f}"
+    eta = refund.eta.isoformat()
+    return {
+        "status": "issued",
+        "order_id": refund.order_id,
+        "refund_id": refund.refund_id,
+        "amount": amount,
+        "eta": eta,
+        "message": (
+            f"Refund {refund.refund_id} for {refund.order_id} is ${amount}. "
+            f"It should appear by {eta}."
+        ),
+    }
+
+
 def review_status(arguments: dict, ctx: RequestContext) -> dict:
     order_id = (arguments.get("order_id") or "").strip()
     query = select(RefundReview).where(RefundReview.customer_id == ctx.customer_id)

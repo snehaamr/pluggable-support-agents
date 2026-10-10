@@ -84,6 +84,12 @@ def plan_refund(messages: list[dict], ctx: RequestContext) -> ModelTurn:
             return ModelTurn(tool_calls=[ToolCall("review_status", arguments)])
         return ModelTurn(content=_review_reply(last_payload(messages) or {}))
 
+    if _wants_refund_status(user_text):
+        if "refund_status" not in called:
+            arguments = {"order_id": order_id} if order_id else {}
+            return ModelTurn(tool_calls=[ToolCall("refund_status", arguments)])
+        return ModelTurn(content=_refund_status_reply(last_payload(messages) or {}))
+
     if _wants_damage_status(user_text):
         if "damage_status" not in called:
             arguments = {"order_id": order_id} if order_id else {}
@@ -308,6 +314,21 @@ def _review_amount(text: str) -> str:
         return found.group(1)
     found = re.search(r"\bfor\s+(\d+\.\d{2})\b", text, re.I)
     return found.group(1) if found else ""
+
+
+def _wants_refund_status(text: str) -> bool:
+    if re.search(r"\b(refund order|process a refund|want a refund|need a refund)\b", text, re.I):
+        return False
+    if not re.search(r"\brefund\b", text, re.I):
+        return False
+    return bool(re.search(r"\b(status|where|when|appear|eta|issued|credited)\b", text, re.I))
+
+
+def _refund_status_reply(payload: dict) -> str:
+    refunds = payload.get("refunds") or []
+    if refunds:
+        return " ".join(refund.get("message") or "" for refund in refunds).strip()
+    return payload.get("message") or "You have no refunds."
 
 
 def _wants_damage_status(text: str) -> bool:

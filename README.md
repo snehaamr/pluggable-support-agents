@@ -37,7 +37,7 @@ flowchart TD
 | Silver | 20 days from delivery | 75% of the purchase price |
 | Bronze | 15 days from delivery | Pending review, no automatic refund |
 
-Eligible statuses are `delivered`, `shipped`, and `return_requested`. A damage or defect claim without a description is saved until the customer describes what broke. With that note, gold and silver refunds continue, and bronze still goes to review. `process_refund` checks the rule again, so a refund cannot be written by skipping eligibility. A bronze order inside the window is saved as a pending review. The customer can ask about that review later. Riley can approve it for a specific amount or reject it. A customer cannot decide their own review.
+Eligible statuses are `delivered`, `shipped`, and `return_requested`. A damage or defect claim without a description is saved until the customer describes what broke. With that note, gold and silver refunds continue, and bronze still goes to review. `process_refund` checks the rule again, so a refund cannot be written by skipping eligibility. A bronze order inside the window is saved as a pending review. The customer can ask about that review later. A customer can ask when an issued refund will appear, and the reply uses the stored refund id, amount, and date. Riley can approve it for a specific amount or reject it. A customer cannot decide their own review.
 
 ## Run
 
@@ -53,7 +53,7 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
 
 Run each `uvicorn` command in its own terminal. Open [http://127.0.0.1:8000](http://127.0.0.1:8000) and log in. The chat page shows which agent ran each tool and how long that step took. `POST /chat` reads the customer from the login cookie, not from the request body.
 
-To run one live-model conversation through an order lookup, a policy excerpt, the input guard, a damage claim that continues after a note, and a reviewer approving Sam's pending refund:
+To run one live-model conversation through an order lookup, a policy excerpt, the input guard, a damage claim that continues after a note, a lookup of that issued refund, and a reviewer approving Sam's pending refund:
 
 ```bash
 MODEL_API_KEY=... python scripts/live_conversation.py
