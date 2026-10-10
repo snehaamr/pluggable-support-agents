@@ -317,6 +317,8 @@ def _review_amount(text: str) -> str:
 
 
 def _wants_refund_status(text: str) -> bool:
+    if re.search(r"\breview\b", text, re.I):
+        return False
     if re.search(r"\b(refund order|process a refund|want a refund|need a refund)\b", text, re.I):
         return False
     if not re.search(r"\brefund\b", text, re.I):

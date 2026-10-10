@@ -97,6 +97,33 @@ def test_tool_payload_redacts_email_and_address(client):
     assert order["shipping_address"] == "[REDACTED]"
 
 
+def test_damage_description_is_not_saved_as_a_preference(client):
+    login(client)
+    response = send(client, "The screen is cracked")
+    assert "remember" not in [step["tool"] for step in response.json()["steps"]]
+    db = client.app.state.session_factory()
+    try:
+        customer = db.get(Customer, "CUST-789")
+        ctx = RequestContext(
+            trace_id="trace",
+            customer_id=customer.id,
+            tier=customer.tier,
+            session_id="session",
+            db=db,
+        )
+        rejected = client.app.state.catalog.call(
+            "remember",
+            {"fact": "The screen is cracked"},
+            ctx,
+            allowed=["remember"],
+        )
+        facts = db.scalars(select(MemoryFact).where(MemoryFact.customer_id == "CUST-789")).all()
+    finally:
+        db.close()
+    assert rejected["saved"] is False
+    assert facts == []
+
+
 def test_preference_is_remembered_without_calling_a_specialist(client):
     login(client)
     response = send(client, "I prefer email for refund updates")
@@ -229,6 +256,18 @@ def test_eligibility_list_covers_each_order(client):
     assert "ORD-10004" in reply
     assert "ORD-10005" in reply
     assert "list_eligible" in [step["tool"] for step in response.json()["steps"]]
+
+
+def test_refunded_order_is_not_listed_as_eligible(client):
+    login(client)
+    send(client, "Refund order ORD-10001")
+    response = send(client, "Which of my orders are eligible for a refund?")
+    reply = response.json()["reply"]
+    assert "ORD-10001" in reply
+    assert "already refunded" in reply.lower()
+    assert "ORD-10005" in reply
+    laptop = next(part for part in reply.split("ORD-") if part.startswith("10001"))
+    assert "inside the gold" not in laptop.lower()
 
 
 def test_chat_requires_login(client):

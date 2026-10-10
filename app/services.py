@@ -124,6 +124,8 @@ def create_refund_app(settings: Settings) -> FastAPI:
             "Call add_damage_note only when the customer describes the damage, such as a cracked screen, "
             "and pass their words as the note. Then call process_refund when eligible "
             "or open_review when the tier needs a review. "
+            "When list_eligible returns, repeat each order's message field in the reply. "
+            "Do not call an order eligible unless its status is eligible, and do not leave an order out. "
             "If the customer asks about an existing damage claim, call damage_status. "
             "If the customer asks about an existing review, call review_status. "
             "A reviewer uses list_reviews and decide_review. Customers cannot decide a review."

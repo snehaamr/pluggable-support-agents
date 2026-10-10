@@ -44,8 +44,29 @@ def list_eligible(arguments: dict, ctx: RequestContext) -> dict:
     orders = ctx.db.scalars(
         select(Order).where(Order.customer_id == ctx.customer_id).order_by(Order.order_id)
     ).all()
+    refunds = {
+        refund.order_id: refund
+        for refund in ctx.db.scalars(
+            select(Refund)
+            .join(Order, Refund.order_id == Order.order_id)
+            .where(Order.customer_id == ctx.customer_id)
+        ).all()
+    }
     rows = []
     for order in orders:
+        existing = refunds.get(order.order_id)
+        if existing is not None:
+            amount = f"{Decimal(existing.amount):.2f}"
+            rows.append(
+                {
+                    "order_id": order.order_id,
+                    "product_name": order.product_name,
+                    "status": "already_refunded",
+                    "message": f"{order.order_id} was already refunded as {existing.refund_id} for ${amount}.",
+                    "amount": amount,
+                }
+            )
+            continue
         decision = _decide(order, ctx, {"reason": arguments.get("reason", "")})
         rows.append(
             {

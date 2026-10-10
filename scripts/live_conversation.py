@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from app.config import Settings
-from app.db import DamageClaim, Refund, RefundReview
+from app.db import DamageClaim, MemoryFact, Refund, RefundReview
 from app.main import create_app
 
 
@@ -99,6 +99,7 @@ def main() -> int:
             _expect(claim_status == "noted", noted_body)
             _expect("cracked" in (claim_note or "").lower(), noted_body)
             _expect(_stored(client, "ORD-10005")[1] == "649.99", noted_body)
+            _expect(not any("cracked" in fact.lower() for fact in _facts(client)), noted_body)
             refund_id = _refund_id(client, "ORD-10005")
 
             asked = client.post(
@@ -113,6 +114,20 @@ def main() -> int:
             _expect("process_refund" not in _tools(asked_body), asked_body)
             _expect(refund_id in asked_body["reply"], asked_body)
             _expect("649.99" in asked_body["reply"], asked_body)
+
+            eligible = client.post(
+                "/chat",
+                json={
+                    "message": "Which of my orders are eligible for a refund?",
+                    "session_id": asked_body["session_id"],
+                },
+            )
+            eligible_body = eligible.json()
+            _expect("list_eligible" in _tools(eligible_body), eligible_body)
+            reply = eligible_body["reply"].lower()
+            tablet = reply.find("ord-10005")
+            _expect(tablet >= 0, eligible_body)
+            _expect("already refunded" in reply[tablet:tablet + 120], eligible_body)
 
             sam = client.post("/login", json={"username": "sam", "password": "bronze-pass"})
             _expect(sam.status_code == 200, sam.text)
@@ -156,10 +171,19 @@ def main() -> int:
     print(f"Damage claim: {damaged_body['reply']}")
     print(f"Damage note: {noted_body['reply']}")
     print(f"Refund lookup: {asked_body['reply']}")
+    print(f"Eligibility: {eligible_body['reply']}")
     print(f"Review opened: {opened_body['reply']}")
     print(f"Pending: {listed_body['reply']}")
     print(f"Decision: {decided_body['reply']}")
     return 0
+
+
+def _facts(client: TestClient) -> list[str]:
+    db = client.app.state.session_factory()
+    try:
+        return list(db.scalars(select(MemoryFact.fact)).all())
+    finally:
+        db.close()
 
 
 def _refund_id(client: TestClient, order_id: str) -> str:

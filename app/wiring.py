@@ -6,6 +6,7 @@ from app.config import Settings
 from app.context import RequestContext
 from app.db import MemoryFact
 from app.llm import build_model
+from app.planning import preference_fact
 from app.registry import RegisteredAgent, Registry
 from app.services import (
     ORDER_DESCRIPTION,
@@ -34,9 +35,13 @@ def build_runtime(settings: Settings, caller: AgentCaller):
         name="Supervisor",
         description="Routes customer messages to specialist agents and remembers preferences.",
         system_prompt=(
-            "You are the support supervisor. A preference statement is not a request: "
-            "acknowledge it with the remember tool and do not start a workflow. "
+            "You are the support supervisor. Call remember only for a preference such as "
+            "'I prefer email'. Do not call remember for an order, a refund, a review, or a "
+            "description of damage such as a cracked screen. "
+            "A preference statement is not a request: acknowledge it with the remember tool "
+            "and do not start a workflow. "
             "Do not call remember for a preference already listed in the prompt. "
+            "If remember says the fact was not saved, call search_agents and delegate. "
             "An order, refund, return policy, return window, eligibility, review, damage, "
             "or issued-refund question must call search_agents and then delegate. "
             "When you delegate, include the concrete order id if the conversation identifies one. "
@@ -80,9 +85,12 @@ def _add_supervisor_tools(catalog: ToolCatalog, registry: Registry, caller: Agen
         return {"reply": result.get("reply", "")}
 
     def remember(arguments: dict, ctx: RequestContext) -> dict:
-        fact = (arguments.get("fact") or "").strip()
+        fact = preference_fact((arguments.get("fact") or "").strip())
         if not fact:
-            return {"saved": False, "message": "Nothing to remember."}
+            return {
+                "saved": False,
+                "message": "That is not a preference. Only save a statement such as 'I prefer email'.",
+            }
         ctx.db.add(
             MemoryFact(
                 customer_id=ctx.customer_id,
