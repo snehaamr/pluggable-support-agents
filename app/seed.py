@@ -24,6 +24,7 @@ def seed(db: Session, today: date | None = None) -> None:
         db.add_all(_customers())
         _load_orders(db, today)
     _backfill_logins(db)
+    _backfill_orders(db, today or date.today())
 
 
 def _customers() -> list[Customer]:
@@ -70,6 +71,24 @@ def _backfill_logins(db: Session) -> None:
         )
 
 
+def _backfill_orders(db: Session, today: date) -> None:
+    if db.get(Customer, "CUST-789") is None or db.get(Order, "ORD-10005") is not None:
+        return
+    db.add(
+        _order(
+            "ORD-10005",
+            "CUST-789",
+            "delivered",
+            "Tablet",
+            "Electronics",
+            "649.99",
+            today - timedelta(days=4),
+            "avery.chen@example.com",
+            "123 Main St, Seattle, WA 98101",
+        )
+    )
+
+
 def _load_orders(db: Session, today: date) -> None:
     db.add_all(
         [
@@ -103,6 +122,17 @@ def _load_orders(db: Session, today: date) -> None:
                 "Electronics",
                 "29.99",
                 None,
+                "avery.chen@example.com",
+                "123 Main St, Seattle, WA 98101",
+            ),
+            _order(
+                "ORD-10005",
+                "CUST-789",
+                "delivered",
+                "Tablet",
+                "Electronics",
+                "649.99",
+                today - timedelta(days=4),
                 "avery.chen@example.com",
                 "123 Main St, Seattle, WA 98101",
             ),

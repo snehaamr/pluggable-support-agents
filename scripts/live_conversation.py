@@ -1,4 +1,4 @@
-"""Run one live-model conversation through the guard, an order lookup, a policy excerpt, and a review decision.
+"""Run one live-model conversation through the guard, an order lookup, a policy excerpt, a damage claim, and a review decision.
 
 Requires MODEL_API_KEY. MODEL_BASE_URL and MODEL_NAME are optional.
 The specialists are called in process so this does not bind ports.
@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from app.config import Settings
-from app.db import Refund, RefundReview
+from app.db import DamageClaim, Refund, RefundReview
 from app.main import create_app
 
 
@@ -72,6 +72,34 @@ def main() -> int:
             _expect(blocked_body["steps"][0]["status"] == "blocked", blocked_body)
             _expect("search_agents" not in _tools(blocked_body), blocked_body)
 
+            damaged = client.post("/chat", json={"message": "Refund order ORD-10005, it arrived damaged"})
+            damaged_body = damaged.json()
+            _expect(damaged.status_code == 200, damaged.text)
+            _expect(
+                "record_damage" in _tools(damaged_body) or "process_refund" in _tools(damaged_body),
+                damaged_body,
+            )
+            claim_status, claim_note = _claim(client, "ORD-10005")
+            _expect(claim_status == "pending_evidence", damaged_body)
+            _expect(claim_note == "", damaged_body)
+            _expect(_stored(client, "ORD-10005")[1] is None, damaged_body)
+
+            noted = client.post(
+                "/chat",
+                json={
+                    "message": "The screen is cracked",
+                    "session_id": damaged_body["session_id"],
+                },
+            )
+            noted_body = noted.json()
+            _expect("add_damage_note" in _tools(noted_body), noted_body)
+            _expect("process_refund" in _tools(noted_body), noted_body)
+            _expect("649.99" in noted_body["reply"], noted_body)
+            claim_status, claim_note = _claim(client, "ORD-10005")
+            _expect(claim_status == "noted", noted_body)
+            _expect("cracked" in (claim_note or "").lower(), noted_body)
+            _expect(_stored(client, "ORD-10005")[1] == "649.99", noted_body)
+
             sam = client.post("/login", json={"username": "sam", "password": "bronze-pass"})
             _expect(sam.status_code == 200, sam.text)
             opened = client.post("/chat", json={"message": "Refund order ORD-30001"})
@@ -111,10 +139,23 @@ def main() -> int:
     print(f"Order: {order_body['reply']}")
     print(f"Policy: {policy_body['reply']}")
     print(f"Guard: {blocked_body['reply']}")
+    print(f"Damage claim: {damaged_body['reply']}")
+    print(f"Damage note: {noted_body['reply']}")
     print(f"Review opened: {opened_body['reply']}")
     print(f"Pending: {listed_body['reply']}")
     print(f"Decision: {decided_body['reply']}")
     return 0
+
+
+def _claim(client: TestClient, order_id: str) -> tuple[str | None, str | None]:
+    db = client.app.state.session_factory()
+    try:
+        claim = db.scalar(select(DamageClaim).where(DamageClaim.order_id == order_id))
+        if claim is None:
+            return None, None
+        return claim.status, claim.note
+    finally:
+        db.close()
 
 
 def _stored(client: TestClient, order_id: str) -> tuple[str | None, str | None]:

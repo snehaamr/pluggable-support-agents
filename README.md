@@ -53,7 +53,7 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
 
 Run each `uvicorn` command in its own terminal. Open [http://127.0.0.1:8000](http://127.0.0.1:8000) and log in. The chat page shows which agent ran each tool and how long that step took. `POST /chat` reads the customer from the login cookie, not from the request body.
 
-To run one live-model conversation through an order lookup, a policy excerpt, the input guard, and a reviewer approving Sam's pending refund:
+To run one live-model conversation through an order lookup, a policy excerpt, the input guard, a damage claim that continues after a note, and a reviewer approving Sam's pending refund:
 
 ```bash
 MODEL_API_KEY=... python scripts/live_conversation.py
@@ -61,7 +61,7 @@ MODEL_API_KEY=... python scripts/live_conversation.py
 
 | Username | Password | Tier | Sample order |
 |---|---|---|---|
-| `avery` | `gold-pass` | gold | `ORD-10001` laptop, delivered 10 days ago |
+| `avery` | `gold-pass` | gold | `ORD-10001` laptop, delivered 10 days ago. `ORD-10005` tablet, delivered 4 days ago |
 | `jordan` | `silver-pass` | silver | `ORD-20001` headphones, delivered 8 days ago |
 | `sam` | `bronze-pass` | bronze | `ORD-30001` mug, delivered 3 days ago, held for review |
 | `riley` | `review-pass` | reviewer | Decides pending reviews |

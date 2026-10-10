@@ -63,6 +63,33 @@ def test_bronze_stays_in_review():
     assert decision["amount"] is None
 
 
+def test_a_generic_damage_reason_is_not_a_note():
+    decision = evaluate(
+        tier="gold",
+        status="delivered",
+        delivered_on=date(2026, 10, 1),
+        today=TODAY,
+        amount=Decimal("649.99"),
+        reason="damaged on arrival",
+        damage_note="it arrived damaged",
+    )
+    assert decision["status"] == "pending_evidence"
+
+
+def test_a_cracked_screen_note_allows_the_refund():
+    decision = evaluate(
+        tier="gold",
+        status="delivered",
+        delivered_on=date(2026, 10, 1),
+        today=TODAY,
+        amount=Decimal("649.99"),
+        reason="damaged on arrival",
+        damage_note="The screen is cracked",
+    )
+    assert decision["status"] == "eligible"
+    assert decision["amount"] == "649.99"
+
+
 def test_damage_without_a_note_waits_for_evidence():
     decision = evaluate(
         tier="gold",

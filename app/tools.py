@@ -6,7 +6,7 @@ from sqlalchemy import select
 
 from app.context import RequestContext
 from app.db import DamageClaim, Order, Refund, RefundReview
-from app.policy import evaluate, search_policy
+from app.policy import evaluate, note_describes_damage, search_policy
 
 
 def check_order_details(arguments: dict, ctx: RequestContext) -> dict:
@@ -171,12 +171,8 @@ def add_damage_note(arguments: dict, ctx: RequestContext) -> dict:
     if order is None:
         return {"order_id": arguments.get("order_id", ""), "status": "not_found", "message": "Order not found."}
     note = (arguments.get("note") or "").strip()
-    if not note:
-        return {
-            "status": "pending_evidence",
-            "order_id": order.order_id,
-            "message": f"{order.order_id} is still waiting for a damage note. Describe what was damaged.",
-        }
+    if not note_describes_damage(note):
+        return record_damage(arguments, ctx)
 
     claim = ctx.db.scalar(select(DamageClaim).where(DamageClaim.order_id == order.order_id))
     if claim is None:
