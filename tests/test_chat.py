@@ -4,7 +4,7 @@ from sqlalchemy import select
 
 from app.config import Settings
 from app.context import RequestContext
-from app.db import Customer, MemoryFact, Refund, RefundReview
+from app.db import Customer, DamageClaim, MemoryFact, Refund, RefundReview
 from app.main import create_app
 from app.planning import route_message
 
@@ -281,6 +281,68 @@ def test_bronze_refund_is_saved_as_a_review(client):
     assert "review_status" in [step["tool"] for step in status.json()["steps"]]
 
 
+def test_damage_without_a_note_is_saved_and_a_later_note_refunds(client):
+    login(client, "avery", "gold-pass")
+    opened = send(client, "Refund order ORD-10001, it arrived damaged")
+    body = opened.json()
+    tools = [step["tool"] for step in body["steps"]]
+    assert "record_damage" in tools
+    assert "process_refund" not in tools
+    assert "waiting for a damage note" in body["reply"].lower()
+    db = client.app.state.session_factory()
+    try:
+        claim = db.scalar(select(DamageClaim).where(DamageClaim.order_id == "ORD-10001"))
+        refund = db.scalar(select(Refund).where(Refund.order_id == "ORD-10001"))
+        assert claim is not None
+        claim_id = claim.claim_id
+        assert claim.status == "pending_evidence"
+        assert claim.note == ""
+        assert refund is None
+    finally:
+        db.close()
+
+    status = send(client, "What is the status of my damage claim?", session_id=body["session_id"])
+    assert claim_id in status.json()["reply"]
+    assert "damage_status" in [step["tool"] for step in status.json()["steps"]]
+
+    noted = send(client, "The screen is cracked", session_id=body["session_id"])
+    noted_tools = [step["tool"] for step in noted.json()["steps"]]
+    assert "add_damage_note" in noted_tools
+    assert "process_refund" in noted_tools
+    assert "1999.99" in noted.json()["reply"]
+    db = client.app.state.session_factory()
+    try:
+        claim = db.scalar(select(DamageClaim).where(DamageClaim.order_id == "ORD-10001"))
+        refund = db.scalar(select(Refund).where(Refund.order_id == "ORD-10001"))
+        assert claim.status == "noted"
+        assert "cracked" in claim.note.lower()
+        assert refund is not None
+        assert f"{refund.amount:.2f}" == "1999.99"
+    finally:
+        db.close()
+
+
+def test_bronze_damage_note_opens_a_review(client):
+    login(client, "sam", "bronze-pass")
+    response = send(client, "Refund order ORD-30001, the mug is cracked")
+    tools = [step["tool"] for step in response.json()["steps"]]
+    assert "add_damage_note" in tools
+    assert "open_review" in tools
+    assert "process_refund" not in tools
+    assert "pending" in response.json()["reply"].lower()
+    db = client.app.state.session_factory()
+    try:
+        claim = db.scalar(select(DamageClaim).where(DamageClaim.order_id == "ORD-30001"))
+        review = db.scalar(select(RefundReview).where(RefundReview.order_id == "ORD-30001"))
+        refund = db.scalar(select(Refund).where(Refund.order_id == "ORD-30001"))
+        assert claim is not None and claim.status == "noted"
+        assert "cracked" in claim.note.lower()
+        assert review is not None and review.status == "pending"
+        assert refund is None
+    finally:
+        db.close()
+
+
 def test_customer_cannot_decide_a_review(client):
     login(client, "sam", "bronze-pass")
     send(client, "Refund order ORD-30001")
@@ -412,6 +474,8 @@ def test_process_refund_refuses_an_ineligible_order(client):
         ("Which of my orders are eligible for a refund?", "refund"),
         ("What is the gold return window?", "refund"),
         ("What is the status of my refund review?", "refund"),
+        ("The screen is cracked", "refund"),
+        ("Refund order ORD-10001, it arrived damaged", "refund"),
         ("I prefer email for refund updates", None),
         ("I prefer email and what is the status of ORD-10001?", "order"),
     ],

@@ -4,7 +4,7 @@ import re
 from sqlalchemy import select
 
 from app.context import RequestContext
-from app.db import Order
+from app.db import DamageClaim, Order
 from app.turns import ModelTurn, ToolCall
 
 
@@ -84,6 +84,47 @@ def plan_refund(messages: list[dict], ctx: RequestContext) -> ModelTurn:
             return ModelTurn(tool_calls=[ToolCall("review_status", arguments)])
         return ModelTurn(content=_review_reply(last_payload(messages) or {}))
 
+    if _wants_damage_status(user_text):
+        if "damage_status" not in called:
+            arguments = {"order_id": order_id} if order_id else {}
+            return ModelTurn(tool_calls=[ToolCall("damage_status", arguments)])
+        return ModelTurn(content=_damage_reply(last_payload(messages) or {}))
+
+    if _is_damage_note(user_text):
+        decision = last_payload(messages) or {} if "add_damage_note" in called else {}
+        if not order_id:
+            order_id = decision.get("order_id") or _pending_damage_order(ctx)
+        if not order_id:
+            return ModelTurn(content="Which order was damaged? Send the order id, for example ORD-10001.")
+        if "add_damage_note" not in called:
+            return ModelTurn(
+                tool_calls=[
+                    ToolCall(
+                        "add_damage_note",
+                        {"order_id": order_id, "note": user_text.strip(), "reason": "damaged on arrival"},
+                    )
+                ]
+            )
+        if decision.get("status") == "eligible" and "process_refund" not in called:
+            return ModelTurn(
+                tool_calls=[
+                    ToolCall(
+                        "process_refund",
+                        {"order_id": order_id, "reason": "damaged on arrival", "damage_note": user_text.strip()},
+                    )
+                ]
+            )
+        if decision.get("status") == "needs_review" and "open_review" not in called:
+            return ModelTurn(
+                tool_calls=[
+                    ToolCall(
+                        "open_review",
+                        {"order_id": order_id, "reason": "damaged on arrival", "damage_note": user_text.strip()},
+                    )
+                ]
+            )
+        return ModelTurn(content=_refund_reply(decision))
+
     if _wants_refund_action(user_text, order_id):
         if not order_id:
             return ModelTurn(content="Which order should I refund? Send the order id, for example ORD-10001.")
@@ -115,6 +156,15 @@ def plan_refund(messages: list[dict], ctx: RequestContext) -> ModelTurn:
                     )
                 ]
             )
+        if decision.get("status") == "pending_evidence" and "record_damage" not in called:
+            return ModelTurn(
+                tool_calls=[
+                    ToolCall(
+                        "record_damage",
+                        {"order_id": order_id, "reason": reason},
+                    )
+                ]
+            )
         return ModelTurn(content=_refund_reply(decision))
 
     if re.search(r"\b(policy|window|how long|percentage)\b", user_text, re.I):
@@ -134,7 +184,7 @@ def route_message(text: str) -> str | None:
     )
     if preference_only:
         return None
-    if re.search(r"\b(refund|eligible|return policy|return window|review)\b", lower):
+    if re.search(r"\b(refund|eligible|return policy|return window|review|damage|damaged|defect|cracked|broken)\b", lower):
         return "refund"
     if re.search(r"\b(order|orders|status|tracking)\b", lower):
         return "order"
@@ -258,6 +308,37 @@ def _review_amount(text: str) -> str:
         return found.group(1)
     found = re.search(r"\bfor\s+(\d+\.\d{2})\b", text, re.I)
     return found.group(1) if found else ""
+
+
+def _wants_damage_status(text: str) -> bool:
+    return bool(re.search(r"\bdamage claim\b", text, re.I)) and bool(
+        re.search(r"\b(status|what|where)\b", text, re.I)
+    )
+
+
+def _is_damage_note(text: str) -> bool:
+    return "damage note" in text.lower() or bool(
+        re.search(r"\b(cracked|broken|shattered|scratched|dented|torn)\b", text, re.I)
+    )
+
+
+def _pending_damage_order(ctx: RequestContext) -> str:
+    claims = ctx.db.scalars(
+        select(DamageClaim).where(
+            DamageClaim.customer_id == ctx.customer_id,
+            DamageClaim.status == "pending_evidence",
+        )
+    ).all()
+    if len(claims) == 1:
+        return claims[0].order_id
+    return ""
+
+
+def _damage_reply(payload: dict) -> str:
+    claims = payload.get("claims") or []
+    if claims:
+        return " ".join(claim.get("message") or "" for claim in claims).strip()
+    return payload.get("message") or "You have no damage claims."
 
 
 def _wants_review_status(text: str) -> bool:
