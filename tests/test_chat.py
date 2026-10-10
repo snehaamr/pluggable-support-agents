@@ -150,6 +150,48 @@ def test_gold_refund_is_issued_through_the_refund_agent(client):
     assert f"{refund.amount:.2f}" == "1999.99"
 
 
+def test_customer_can_ask_when_an_issued_refund_appears(client):
+    login(client)
+    issued = send(client, "Refund order ORD-10001")
+    db = client.app.state.session_factory()
+    try:
+        refund = db.scalar(select(Refund).where(Refund.order_id == "ORD-10001"))
+        refund_id = refund.refund_id
+        eta = refund.eta.isoformat()
+    finally:
+        db.close()
+
+    asked = send(
+        client,
+        "When will my refund for ORD-10001 appear?",
+        session_id=issued.json()["session_id"],
+    )
+    body = asked.json()
+    tools = [step["tool"] for step in body["steps"]]
+    assert "refund_status" in tools
+    assert "process_refund" not in tools
+    assert "check_eligible" not in tools
+    assert refund_id in body["reply"]
+    assert "1999.99" in body["reply"]
+    assert eta in body["reply"]
+
+
+def test_refund_lookup_does_not_start_a_refund(client):
+    login(client)
+    response = send(client, "When will my refund for ORD-10005 appear?")
+    body = response.json()
+    tools = [step["tool"] for step in body["steps"]]
+    assert "refund_status" in tools
+    assert "process_refund" not in tools
+    assert "no refund" in body["reply"].lower()
+    db = client.app.state.session_factory()
+    try:
+        refund = db.scalar(select(Refund).where(Refund.order_id == "ORD-10005"))
+    finally:
+        db.close()
+    assert refund is None
+
+
 def test_old_order_is_not_refunded(client):
     login(client)
     response = send(client, "Refund order ORD-10002")
@@ -475,6 +517,7 @@ def test_process_refund_refuses_an_ineligible_order(client):
         ("Which of my orders are eligible for a refund?", "refund"),
         ("What is the gold return window?", "refund"),
         ("What is the status of my refund review?", "refund"),
+        ("When will my refund for ORD-10001 appear?", "refund"),
         ("The screen is cracked", "refund"),
         ("Refund order ORD-10001, it arrived damaged", "refund"),
         ("I prefer email for refund updates", None),
