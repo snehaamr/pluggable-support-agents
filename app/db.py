@@ -53,6 +53,18 @@ class Refund(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class DamageClaim(Base):
+    __tablename__ = "damage_claims"
+
+    claim_id: Mapped[str] = mapped_column(String, primary_key=True)
+    order_id: Mapped[str] = mapped_column(ForeignKey("orders.order_id"), unique=True)
+    customer_id: Mapped[str] = mapped_column(String, index=True)
+    reason: Mapped[str] = mapped_column(String, nullable=False)
+    note: Mapped[str] = mapped_column(String, nullable=False, default="")
+    status: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class RefundReview(Base):
     __tablename__ = "refund_reviews"
 

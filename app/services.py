@@ -14,20 +14,23 @@ from app.context import RequestContext
 from app.db import Base, make_engine, make_session_factory
 from app.llm import build_model
 from app.tools import (
+    add_damage_note,
     check_eligible,
     check_order_details,
+    damage_status,
     decide_review,
     list_eligible,
     list_reviews,
     open_review,
     process_refund,
+    record_damage,
     refund_policy,
     review_status,
 )
 
 
 ORDER_DESCRIPTION = "Order lookup by id and listing a customer's orders."
-REFUND_DESCRIPTION = "Refund eligibility, return policy, refund reviews, and issuing refunds."
+REFUND_DESCRIPTION = "Refund eligibility, return policy, damage claims, refund reviews, and issuing refunds."
 
 _OBJECT = {"type": "object", "additionalProperties": False}
 
@@ -111,9 +114,12 @@ def create_refund_app(settings: Settings) -> FastAPI:
             "Use refund_policy before deciding eligibility. "
             "Call check_eligible before process_refund or open_review. Never invent a refund. "
             "If check_eligible says needs_review, call open_review and do not call process_refund. "
+            "If check_eligible says pending_evidence, call record_damage and do not call process_refund. "
+            "If the customer describes the damage, call add_damage_note, then process_refund when eligible "
+            "or open_review when the tier needs a review. "
+            "If the customer asks about an existing damage claim, call damage_status. "
             "If the customer asks about an existing review, call review_status. "
-            "A reviewer uses list_reviews and decide_review. Customers cannot decide a review. "
-            "If the tool says the refund needs evidence, stop and say so."
+            "A reviewer uses list_reviews and decide_review. Customers cannot decide a review."
         ),
         tool_names=[
             "refund_policy",
@@ -121,6 +127,9 @@ def create_refund_app(settings: Settings) -> FastAPI:
             "list_eligible",
             "process_refund",
             "open_review",
+            "record_damage",
+            "add_damage_note",
+            "damage_status",
             "review_status",
             "decide_review",
             "list_reviews",
@@ -284,6 +293,48 @@ def _add_refund_tools(catalog: ToolCatalog) -> None:
                 "required": ["order_id"],
             },
             fn=open_review,
+        )
+    )
+    catalog.add(
+        Tool(
+            name="record_damage",
+            description="Save a damage claim that is waiting for a note describing what broke.",
+            parameters={
+                **_OBJECT,
+                "properties": {
+                    "order_id": {"type": "string"},
+                    "reason": {"type": "string"},
+                },
+                "required": ["order_id"],
+            },
+            fn=record_damage,
+        )
+    )
+    catalog.add(
+        Tool(
+            name="add_damage_note",
+            description="Save the customer's description of the damage and continue the refund.",
+            parameters={
+                **_OBJECT,
+                "properties": {
+                    "order_id": {"type": "string"},
+                    "note": {"type": "string"},
+                    "reason": {"type": "string"},
+                },
+                "required": ["order_id", "note"],
+            },
+            fn=add_damage_note,
+        )
+    )
+    catalog.add(
+        Tool(
+            name="damage_status",
+            description="Look up damage claims for the signed-in customer.",
+            parameters={
+                **_OBJECT,
+                "properties": {"order_id": {"type": "string"}},
+            },
+            fn=damage_status,
         )
     )
     catalog.add(

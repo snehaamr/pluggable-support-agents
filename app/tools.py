@@ -5,7 +5,7 @@ from decimal import Decimal
 from sqlalchemy import select
 
 from app.context import RequestContext
-from app.db import Order, Refund, RefundReview
+from app.db import DamageClaim, Order, Refund, RefundReview
 from app.policy import evaluate, search_policy
 
 
@@ -78,6 +78,8 @@ def process_refund(arguments: dict, ctx: RequestContext) -> dict:
     decision = _decide(order, ctx, arguments)
     if decision["status"] == "needs_review":
         return open_review(arguments, ctx)
+    if decision["status"] == "pending_evidence":
+        return record_damage(arguments, ctx)
     if decision["status"] != "eligible":
         decision["order_id"] = order.order_id
         return decision
@@ -125,6 +127,110 @@ def open_review(arguments: dict, ctx: RequestContext) -> dict:
     ctx.db.add(review)
     ctx.db.flush()
     return _review_payload(review)
+
+
+def record_damage(arguments: dict, ctx: RequestContext) -> dict:
+    order = _owned_order(ctx, arguments.get("order_id", ""))
+    if order is None:
+        return {"order_id": arguments.get("order_id", ""), "status": "not_found", "message": "Order not found."}
+
+    existing_refund = ctx.db.scalar(select(Refund).where(Refund.order_id == order.order_id))
+    if existing_refund is not None:
+        return {
+            "status": "already_refunded",
+            "order_id": order.order_id,
+            "refund_id": existing_refund.refund_id,
+            "message": f"Refund {existing_refund.refund_id} was already issued for {order.order_id}.",
+        }
+
+    existing = ctx.db.scalar(select(DamageClaim).where(DamageClaim.order_id == order.order_id))
+    if existing is not None:
+        return _damage_payload(existing)
+
+    decision = _decide(order, ctx, {**arguments, "damage_note": ""})
+    if decision["status"] != "pending_evidence":
+        decision["order_id"] = order.order_id
+        return decision
+
+    claim = DamageClaim(
+        claim_id=f"DMG-{order.order_id.removeprefix('ORD-')}-{uuid.uuid4().hex[:6].upper()}",
+        order_id=order.order_id,
+        customer_id=ctx.customer_id,
+        reason=(arguments.get("reason") or "damaged on arrival").strip(),
+        note="",
+        status="pending_evidence",
+        created_at=datetime.now(timezone.utc),
+    )
+    ctx.db.add(claim)
+    ctx.db.flush()
+    return _damage_payload(claim)
+
+
+def add_damage_note(arguments: dict, ctx: RequestContext) -> dict:
+    order = _owned_order(ctx, arguments.get("order_id", ""))
+    if order is None:
+        return {"order_id": arguments.get("order_id", ""), "status": "not_found", "message": "Order not found."}
+    note = (arguments.get("note") or "").strip()
+    if not note:
+        return {
+            "status": "pending_evidence",
+            "order_id": order.order_id,
+            "message": f"{order.order_id} is still waiting for a damage note. Describe what was damaged.",
+        }
+
+    claim = ctx.db.scalar(select(DamageClaim).where(DamageClaim.order_id == order.order_id))
+    if claim is None:
+        claim = DamageClaim(
+            claim_id=f"DMG-{order.order_id.removeprefix('ORD-')}-{uuid.uuid4().hex[:6].upper()}",
+            order_id=order.order_id,
+            customer_id=ctx.customer_id,
+            reason=(arguments.get("reason") or "damaged on arrival").strip(),
+            note=note,
+            status="noted",
+            created_at=datetime.now(timezone.utc),
+        )
+        ctx.db.add(claim)
+    else:
+        claim.note = note
+        claim.status = "noted"
+    ctx.db.flush()
+
+    decision = _decide(
+        order,
+        ctx,
+        {"reason": arguments.get("reason") or "damaged on arrival", "damage_note": note},
+    )
+    decision["order_id"] = order.order_id
+    decision["claim_id"] = claim.claim_id
+    decision["message"] = f"Damage note saved on {claim.claim_id}. {decision['message']}"
+    return decision
+
+
+def damage_status(arguments: dict, ctx: RequestContext) -> dict:
+    order_id = (arguments.get("order_id") or "").strip()
+    query = select(DamageClaim).where(DamageClaim.customer_id == ctx.customer_id)
+    if order_id:
+        query = query.where(DamageClaim.order_id == order_id)
+    claims = ctx.db.scalars(query.order_by(DamageClaim.created_at)).all()
+    if not claims:
+        return {"claims": [], "message": "You have no damage claims."}
+    return {"claims": [_damage_payload(claim) for claim in claims]}
+
+
+def _damage_payload(claim: DamageClaim) -> dict:
+    if claim.status == "pending_evidence":
+        message = (
+            f"Claim {claim.claim_id} for {claim.order_id} is waiting for a damage note. "
+            "Describe what was damaged."
+        )
+    else:
+        message = f"Claim {claim.claim_id} for {claim.order_id} has a damage note: {claim.note}"
+    return {
+        "status": claim.status,
+        "order_id": claim.order_id,
+        "claim_id": claim.claim_id,
+        "message": message,
+    }
 
 
 def decide_review(arguments: dict, ctx: RequestContext) -> dict:
