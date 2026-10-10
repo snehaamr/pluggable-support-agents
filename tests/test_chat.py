@@ -185,6 +185,7 @@ def test_eligibility_list_covers_each_order(client):
     assert "ORD-10001" in reply
     assert "ORD-10002" in reply
     assert "ORD-10004" in reply
+    assert "ORD-10005" in reply
     assert "list_eligible" in [step["tool"] for step in response.json()["steps"]]
 
 

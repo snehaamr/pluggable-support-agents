@@ -19,6 +19,10 @@ TIER_RULES = {
 }
 
 ELIGIBLE_STATUSES = {"delivered", "shipped", "return_requested"}
+_DAMAGE_DETAILS = re.compile(
+    r"\b(cracked|broken|shattered|scratched|dented|torn|missing|bent|stained|leaking)\b",
+    re.IGNORECASE,
+)
 
 
 _SECTION_TERMS = {
@@ -124,7 +128,7 @@ def evaluate(
             "ineligible",
             f"Outside the {tier} return window of {rule.days} days.",
         )
-    if re.search(r"damage|defect", reason or "", re.IGNORECASE) and not damage_note:
+    if re.search(r"damage|defect", reason or "", re.IGNORECASE) and not note_describes_damage(damage_note):
         return _decision(
             "pending_evidence",
             "A damage note is required before this refund can be issued.",
@@ -144,6 +148,10 @@ def evaluate(
         f"Inside the {tier} return window of {rule.days} days.",
         amount=f"{refund_amount:.2f}",
     )
+
+
+def note_describes_damage(note: str) -> bool:
+    return bool(_DAMAGE_DETAILS.search(note or ""))
 
 
 def _decision(status: str, message: str, amount: str | None = None) -> dict:
