@@ -27,7 +27,15 @@ flowchart TD
 2. A preference such as "I prefer email" is saved and does not start a workflow.
 3. An order or refund request searches the registry and delegates to the specialist URL.
 4. The specialist calls a tool. A policy question returns one section. With a live model, each section is embedded and the closest one is chosen. Keyword matching is used when no model key is set, or when the embedding call fails. A gold question still returns only the Gold line.
-5. The reply, the agents involved, each step's duration, and the model cost come back with a trace id. `GET /traces/{trace_id}` returns the same waterfall and cost. The deterministic planner costs $0.00. Live calls use the published token rates for the model, including `text-embedding-3-small` when a policy section is embedded. When `DD_API_KEY` is set, the same trace is sent to Datadog LLM Observability under the application `pluggable-support-agents`. A failed send leaves the chat reply in place.
+5. The reply, the agents involved, each step's duration, and the model cost come back with a trace id. `GET /traces/{trace_id}` returns the same waterfall and cost. The deterministic planner costs $0.00. Live calls use the published token rates for the model, including `text-embedding-3-small` when a policy section is embedded. When `DD_API_KEY` is set, the same trace is sent to Datadog. A failed send leaves the chat reply in place.
+
+## Datadog traces
+
+With `DD_API_KEY` and `DD_SITE` set, each chat appears in Datadog under **Agent Observability → Traces**, in the application `pluggable-support-agents`. For `DD_SITE=datadoghq.com`, open [the trace list](https://app.datadoghq.com/llm/traces?query=%40ml_app%3Apluggable-support-agents). On another site, use `https://app.<DD_SITE>/llm/traces` and the same query, `@ml_app:pluggable-support-agents`.
+
+![Datadog Agent Observability traces for pluggable-support-agents](docs/datadog-traces.jpg)
+
+Each row is one chat. The input is the customer message and the output is the reply. **Duration** is the time spent in the tools, not the full wait for the model. A refund lookup is short because it only reads the stored refund. A policy question is longer because it embeds the question and picks the closest section. A trace status of OK means those steps finished. New traces can take a minute to show up.
 
 ## Refund rules
 
