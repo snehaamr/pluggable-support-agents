@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     model_base_url: str = "https://api.openai.com/v1"
     model_api_key: str = ""
     model_timeout_seconds: float = 60.0
+    embedding_model: str = "text-embedding-3-small"
     order_agent_url: str = "http://127.0.0.1:8001"
     refund_agent_url: str = "http://127.0.0.1:8002"
     agent_transport: str = "http"

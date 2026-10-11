@@ -187,7 +187,7 @@
       }
       const body = await response.json();
       sessionId = body.session_id;
-      addBubble("assistant", body.reply, body.steps || []);
+      addBubble("assistant", body.reply, body.steps || [], body.usage || null);
     });
 
     function showCustomer(customer) {
@@ -198,11 +198,11 @@
       document.querySelector("#message").focus();
     }
 
-    function addBubble(role, text, steps) {
+    function addBubble(role, text, steps, usage) {
       const bubble = document.createElement("div");
       bubble.className = "bubble " + role;
       bubble.textContent = text;
-      if (steps.length) {
+      if (steps.length || usage) {
         const list = document.createElement("ul");
         list.className = "steps";
         steps.forEach((step) => {
@@ -211,6 +211,13 @@
           item.textContent = step.agent + " · " + step.tool + " · " + duration + "ms";
           list.appendChild(item);
         });
+        if (usage) {
+          const cost = document.createElement("li");
+          cost.textContent = usage.cost_usd == null
+            ? "Cost unavailable for this model"
+            : "Cost · $" + usage.cost_usd;
+          list.appendChild(cost);
+        }
         bubble.appendChild(list);
       }
       transcript.appendChild(bubble);

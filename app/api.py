@@ -10,8 +10,9 @@ from sqlalchemy import select
 
 from app.auth import find_customer
 from app.context import RequestContext
-from app.db import AuthSession, ChatMessage, Customer, MemoryFact, TraceSpan
+from app.db import AuthSession, ChatMessage, Customer, MemoryFact, TraceSpan, TraceUsage
 from app.guard import inspect_text, mask_for_storage
+from app.usage import TokenUsage, cost_usd, format_cost, usage_payload
 
 
 router = APIRouter()
@@ -165,8 +166,9 @@ def chat(body: ChatIn, request: Request):
         trace_id = uuid.uuid4().hex
         if refusal:
             steps = [{"agent": "Guard", "tool": "input", "status": "blocked", "duration_ms": 0}]
-            _finish_turn(db, session_id, customer.id, trace_id, refusal, steps)
-            return _chat_response(session_id, trace_id, refusal, ["Guard"], steps)
+            usage = TokenUsage()
+            _finish_turn(db, session_id, customer.id, trace_id, refusal, steps, usage)
+            return _chat_response(session_id, trace_id, refusal, ["Guard"], steps, usage)
 
         ctx = RequestContext(
             trace_id=trace_id,
@@ -181,8 +183,8 @@ def chat(body: ChatIn, request: Request):
             memory_facts=[row.fact for row in facts],
         )
         reply = request.app.state.supervisor.run(body.message, ctx)
-        _finish_turn(db, session_id, customer.id, trace_id, reply, ctx.steps)
-        return _chat_response(session_id, trace_id, reply, ctx.agents_used, ctx.steps)
+        _finish_turn(db, session_id, customer.id, trace_id, reply, ctx.steps, ctx.usage)
+        return _chat_response(session_id, trace_id, reply, ctx.agents_used, ctx.steps, ctx.usage)
     except HTTPException:
         db.rollback()
         raise
@@ -205,9 +207,11 @@ def trace(trace_id: str, request: Request):
         ).all()
         if not spans:
             raise HTTPException(status_code=404, detail="Trace not found")
+        stored = db.get(TraceUsage, trace_id)
         return {
             "trace_id": trace_id,
             "session_id": spans[0].session_id,
+            "usage": _stored_usage(stored),
             "spans": [
                 {
                     "agent": span.agent,
@@ -222,7 +226,7 @@ def trace(trace_id: str, request: Request):
         db.close()
 
 
-def _finish_turn(db, session_id: str, customer_id: str, trace_id: str, reply: str, steps: list[dict]) -> None:
+def _finish_turn(db, session_id: str, customer_id: str, trace_id: str, reply: str, steps: list[dict], usage: TokenUsage) -> None:
     db.add(
         ChatMessage(
             session_id=session_id,
@@ -245,10 +249,31 @@ def _finish_turn(db, session_id: str, customer_id: str, trace_id: str, reply: st
                 duration_ms=float(step.get("duration_ms") or 0),
             )
         )
+    db.add(
+        TraceUsage(
+            trace_id=trace_id,
+            session_id=session_id,
+            customer_id=customer_id,
+            prompt_tokens=usage.prompt_tokens,
+            completion_tokens=usage.completion_tokens,
+            cost_usd=cost_usd(usage),
+        )
+    )
     db.commit()
 
 
-def _chat_response(session_id: str, trace_id: str, reply: str, agents: list[str], steps: list[dict]):
+def _stored_usage(stored: TraceUsage | None) -> dict:
+    if stored is None:
+        return {"prompt_tokens": 0, "completion_tokens": 0, "cost_usd": "0.00"}
+    amount = None if stored.cost_usd is None else format_cost(stored.cost_usd)
+    return {
+        "prompt_tokens": stored.prompt_tokens,
+        "completion_tokens": stored.completion_tokens,
+        "cost_usd": amount,
+    }
+
+
+def _chat_response(session_id: str, trace_id: str, reply: str, agents: list[str], steps: list[dict], usage: TokenUsage):
     return JSONResponse(
         content={
             "session_id": session_id,
@@ -256,6 +281,7 @@ def _chat_response(session_id: str, trace_id: str, reply: str, agents: list[str]
             "reply": reply,
             "agents": agents,
             "steps": steps,
+            "usage": usage_payload(usage),
         },
         headers={"X-Trace-Id": trace_id},
     )

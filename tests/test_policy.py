@@ -1,7 +1,13 @@
 from datetime import date
 from decimal import Decimal
 
-from app.policy import evaluate
+import httpx
+
+from app.context import RequestContext
+from app.embeddings import OpenAIEmbedder
+from app.policy import evaluate, search_policy
+from app.tools import refund_policy
+from app.usage import TokenUsage, cost_usd
 
 
 TODAY = date(2026, 10, 7)
@@ -115,3 +121,103 @@ def test_cancelled_orders_are_not_eligible():
     )
     assert decision["status"] == "ineligible"
     assert "cancelled" in decision["message"]
+
+
+class _Vectors:
+    def __init__(self, fail: bool = False) -> None:
+        self.fail = fail
+        self.pending = TokenUsage()
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        if self.fail:
+            raise RuntimeError("embeddings unavailable")
+        self.pending.add("text-embedding-3-small", 500000)
+        vectors = []
+        for text in texts:
+            lowered = text.lower()
+            if "refund timing" in lowered or "money put back" in lowered:
+                vectors.append([0.0, 0.0, 0.0, 1.0])
+            elif "membership tiers" in lowered or "gold return" in lowered:
+                vectors.append([1.0, 0.0, 0.0, 0.0])
+            elif "eligible order" in lowered:
+                vectors.append([0.0, 1.0, 0.0, 0.0])
+            elif "damage and defects" in lowered:
+                vectors.append([0.0, 0.0, 1.0, 0.0])
+            else:
+                vectors.append([0.0, 0.0, 0.0, 0.0])
+        return vectors
+
+    def take_usage(self) -> TokenUsage:
+        taken = self.pending
+        self.pending = TokenUsage()
+        return taken
+
+
+def test_semantic_search_picks_the_closest_section_when_keywords_do_not():
+    question = "How soon is the money put back on the card?"
+    keyword = search_policy(question, "gold")
+    semantic = search_policy(question, "gold", embedder=_Vectors())
+    assert "Membership tiers" in keyword
+    assert "within 5 days" in semantic
+    assert "Membership tiers" not in semantic
+
+
+def test_semantic_search_keeps_only_the_callers_tier():
+    text = search_policy("What is the gold return window?", "gold", embedder=_Vectors())
+    assert "30-day" in text
+    assert "Gold" in text
+    assert "15-day" not in text
+    assert "Silver" not in text
+
+
+def test_embedding_failure_uses_keyword_search():
+    question = "How soon is the money put back on the card?"
+    text = search_policy(question, "gold", embedder=_Vectors(fail=True))
+    assert text == search_policy(question, "gold")
+
+
+def test_weak_embeddings_use_keyword_search():
+    text = search_policy("zzzz", "gold", embedder=_Vectors())
+    assert "Membership tiers" in text
+
+
+def test_policy_tool_adds_embedding_cost():
+    embedder = _Vectors()
+    ctx = RequestContext(
+        trace_id="trace",
+        customer_id="CUST-789",
+        tier="gold",
+        session_id="session",
+        db=None,
+    )
+    result = refund_policy(
+        {"question": "How soon is the money put back on the card?"},
+        ctx,
+        embedder=embedder,
+    )
+    assert "within 5 days" in result["policy"]
+    assert ctx.usage.prompt_tokens == 500000
+    assert cost_usd(ctx.usage) == Decimal("0.01")
+
+
+def test_embedder_reuses_vectors_and_records_tokens(monkeypatch):
+    posts = []
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        posts.append(list(json["input"]))
+        data = [{"index": index, "embedding": [float(index + 1), 0.0]} for index in range(len(json["input"]))]
+        request = httpx.Request("POST", url)
+        return httpx.Response(
+            200,
+            json={"data": data, "usage": {"prompt_tokens": 12, "total_tokens": 12}},
+            request=request,
+        )
+
+    monkeypatch.setattr("app.embeddings.httpx.post", fake_post)
+    embedder = OpenAIEmbedder("text-embedding-3-small", "http://models.test/v1", "test-key", 5)
+    first = embedder.embed(["alpha", "beta"])
+    second = embedder.embed(["beta", "gamma"])
+    assert posts == [["alpha", "beta"], ["gamma"]]
+    assert first[1] == second[0]
+    assert embedder.take_usage().prompt_tokens == 24
+    assert embedder.take_usage().charges == []

@@ -26,8 +26,8 @@ flowchart TD
 1. A card number or a prompt-injection phrase is refused before any agent runs. Email addresses and card numbers are masked in stored messages and in tool results.
 2. A preference such as "I prefer email" is saved and does not start a workflow.
 3. An order or refund request searches the registry and delegates to the specialist URL.
-4. The specialist calls a tool. A policy question returns the matching section, not the whole file.
-5. The reply, the agents involved, and each step's duration come back with a trace id. `GET /traces/{trace_id}` returns the same waterfall.
+4. The specialist calls a tool. A policy question returns one section. With a live model, each section is embedded and the closest one is chosen. Keyword matching is used when no model key is set, or when the embedding call fails. A gold question still returns only the Gold line.
+5. The reply, the agents involved, each step's duration, and the model cost come back with a trace id. `GET /traces/{trace_id}` returns the same waterfall and cost. The deterministic planner costs $0.00. Live calls use the published token rates for the model, including `text-embedding-3-small` when a policy section is embedded.
 
 ## Refund rules
 
@@ -51,7 +51,7 @@ uvicorn app.refund_service:app --host 127.0.0.1 --port 8002
 uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-Run each `uvicorn` command in its own terminal. Open [http://127.0.0.1:8000](http://127.0.0.1:8000) and log in. The chat page shows which agent ran each tool and how long that step took. `POST /chat` reads the customer from the login cookie, not from the request body.
+Run each `uvicorn` command in its own terminal. Open [http://127.0.0.1:8000](http://127.0.0.1:8000) and log in. The chat page shows which agent ran each tool, how long that step took, and the cost of the model calls. `POST /chat` reads the customer from the login cookie, not from the request body.
 
 To run one live-model conversation through an order lookup, a policy excerpt, the input guard, a damage claim that continues after a note, a lookup of that issued refund, and a reviewer approving Sam's pending refund:
 
@@ -92,7 +92,8 @@ Copy `.env.example` to `.env`.
 | `MODEL_PROVIDER` | `deterministic` or `openai` |
 | `MODEL_BASE_URL` | OpenAI-compatible chat completions endpoint |
 | `MODEL_NAME` | Model name sent to that endpoint |
-| `MODEL_API_KEY` | Bearer token for the live model |
+| `MODEL_API_KEY` | Bearer token for the live model and for policy embeddings |
+| `EMBEDDING_MODEL` | Embedding model used for policy search. Defaults to `text-embedding-3-small`. |
 | `ORDER_AGENT_URL` | Address the supervisor uses for the Order agent. Defaults to `http://127.0.0.1:8001`. |
 | `REFUND_AGENT_URL` | Address the supervisor uses for the Refund agent. Defaults to `http://127.0.0.1:8002`. |
 | `AGENT_TRANSPORT` | `http` calls the specialist URLs. Tests use `asgi` so they do not bind ports. |

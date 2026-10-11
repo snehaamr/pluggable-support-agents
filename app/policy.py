@@ -1,8 +1,13 @@
+import logging
+import math
 import re
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -46,16 +51,70 @@ def load_policy_text() -> str:
     raise FileNotFoundError("return_policy.txt was not found")
 
 
-def search_policy(question: str, tier: str = "") -> str:
-    """Return only the policy sections that match the question and tier."""
+_SIMILARITY_FLOOR = 0.2
+
+
+def search_policy(question: str, tier: str = "", embedder=None) -> str:
+    """Return the policy section that matches the question and tier.
+
+    A live embedder picks the closest section. Keyword matching is used when
+    no embedder is configured, or when the embedding call fails.
+    """
     sections = _parse_sections(load_policy_text())
+    if embedder is not None and question.strip() and sections:
+        try:
+            chosen = _closest_section(sections, question, embedder)
+        except Exception as exc:
+            logger.warning("policy embedding failed (%s); using keyword search", type(exc).__name__)
+            chosen = None
+        if chosen is not None:
+            return _format_sections([chosen], tier)
+    return _keyword_search(sections, question, tier)
+
+
+def _closest_section(sections: list[dict], question: str, embedder) -> dict | None:
+    texts = [_section_text(section) for section in sections]
+    vectors = embedder.embed([*texts, question])
+    if len(vectors) != len(texts) + 1:
+        raise RuntimeError("Embedding response did not match the policy sections.")
+    query = vectors[-1]
+    best_score = _SIMILARITY_FLOOR
+    best: dict | None = None
+    for section, vector in zip(sections, vectors):
+        score = _cosine(vector, query)
+        if score >= best_score:
+            best_score = score
+            best = section
+    return best
+
+
+def _section_text(section: dict) -> str:
+    return f"{section['title']}\n{section['body']}"
+
+
+def _cosine(left: list[float], right: list[float]) -> float:
+    if len(left) != len(right):
+        return 0.0
+    dot = sum(a * b for a, b in zip(left, right))
+    left_norm = math.sqrt(sum(a * a for a in left))
+    right_norm = math.sqrt(sum(b * b for b in right))
+    if left_norm == 0 or right_norm == 0:
+        return 0.0
+    return dot / (left_norm * right_norm)
+
+
+def _keyword_search(sections: list[dict], question: str, tier: str) -> str:
     scored = [(_score_section(section, question), section) for section in sections]
     scored.sort(key=lambda item: item[0], reverse=True)
     chosen = [section for score, section in scored if score > 0][:2]
     if not chosen and sections:
         chosen = [sections[0]]
+    return _format_sections(chosen, tier)
+
+
+def _format_sections(sections: list[dict], tier: str) -> str:
     parts = []
-    for section in chosen:
+    for section in sections:
         body = section["body"]
         if section["title"] == "Membership tiers" and tier:
             body = _keep_tier(body, tier)

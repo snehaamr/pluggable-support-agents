@@ -49,6 +49,7 @@ class Agent:
                     context=ctx,
                     force_tool=not used_tool,
                 )
+                ctx.usage.merge(turn.usage)
                 if not turn.tool_calls:
                     content = _grounded_reply(messages, turn.content or "I don't have a response for that.")
                     return redact_text(content)
