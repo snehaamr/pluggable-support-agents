@@ -25,9 +25,12 @@ def check_order_details(arguments: dict, ctx: RequestContext) -> dict:
     return {"orders": [_order_payload(order) for order in orders]}
 
 
-def refund_policy(arguments: dict, ctx: RequestContext) -> dict:
+def refund_policy(arguments: dict, ctx: RequestContext, embedder=None) -> dict:
     question = (arguments.get("question") or "").strip()
-    return {"question": question, "tier": ctx.tier, "policy": search_policy(question, ctx.tier)}
+    policy = search_policy(question, ctx.tier, embedder=embedder)
+    if embedder is not None:
+        ctx.usage.merge(embedder.take_usage())
+    return {"question": question, "tier": ctx.tier, "policy": policy}
 
 
 def check_eligible(arguments: dict, ctx: RequestContext) -> dict:

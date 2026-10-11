@@ -312,6 +312,7 @@ def test_card_number_is_blocked_before_the_supervisor(client):
         {"agent": "Guard", "tool": "input", "status": "blocked", "duration_ms": 0}
     ]
     assert "card number" in body["reply"].lower()
+    assert body["usage"]["cost_usd"] == "0.00"
     assert "4111" not in response.text
     assert "process_refund" not in [step["tool"] for step in body["steps"]]
 
@@ -336,6 +337,8 @@ def test_trace_waterfall_records_each_step_duration(client):
     assert [span["tool"] for span in spans] == [step["tool"] for step in body["steps"]]
     assert spans[0]["agent"] == "Supervisor"
     assert spans[-1]["tool"] == "check_order_details"
+    assert body["usage"] == {"prompt_tokens": 0, "completion_tokens": 0, "cost_usd": "0.00"}
+    assert trace.json()["usage"] == body["usage"]
 
 
 def test_bronze_refund_is_saved_as_a_review(client):
@@ -520,6 +523,7 @@ def test_chat_page_offers_login(client):
     assert "jordan" in page.text
     assert "sam" in page.text
     assert "riley" in page.text
+    assert "Cost ·" in page.text
 
 
 def test_process_refund_refuses_an_ineligible_order(client):

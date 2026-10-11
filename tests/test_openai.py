@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.main import create_app
+from app.usage import TokenUsage, cost_usd, format_cost
 
 
 def _message(name=None, arguments=None, content=None):
@@ -19,7 +20,18 @@ def _message(name=None, arguments=None, content=None):
             }
         ]
     request = httpx.Request("POST", "http://models.test/v1/chat/completions")
-    return httpx.Response(200, json={"choices": [{"message": message}]}, request=request)
+    return httpx.Response(
+        200,
+        json={
+            "choices": [{"message": message}],
+            "usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 20,
+                "prompt_tokens_details": {"cached_tokens": 0},
+            },
+        },
+        request=request,
+    )
 
 
 def _called(payload: dict) -> list[str]:
@@ -136,3 +148,22 @@ def test_live_model_keeps_memory_and_resolves_a_follow_up(live_client):
         "process_refund",
     ]
     assert any("I prefer email" in payload["messages"][0]["content"] for payload in live_client.seen)
+
+
+def test_chat_cost_includes_specialist_model_calls(live_client):
+    login = live_client.post("/login", json={"username": "avery", "password": "gold-pass"})
+    assert login.status_code == 200
+    response = live_client.post("/chat", json={"message": "What is the status of ORD-10001?"})
+    assert response.status_code == 200
+    body = response.json()
+    calls = len(live_client.seen)
+    assert calls >= 4
+    expected = TokenUsage()
+    for _ in range(calls):
+        expected.add("gpt-4o-mini", 100, 20)
+    assert body["usage"]["prompt_tokens"] == expected.prompt_tokens
+    assert body["usage"]["completion_tokens"] == expected.completion_tokens
+    assert body["usage"]["cost_usd"] == format_cost(cost_usd(expected))
+    trace = live_client.get(f"/traces/{body['trace_id']}")
+    assert trace.status_code == 200
+    assert trace.json()["usage"] == body["usage"]

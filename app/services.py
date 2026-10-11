@@ -12,6 +12,7 @@ from app.catalog import Tool, ToolCatalog
 from app.config import Settings
 from app.context import RequestContext
 from app.db import Base, make_engine, make_session_factory
+from app.embeddings import build_embedder
 from app.llm import build_model
 from app.tools import (
     add_damage_note,
@@ -103,7 +104,7 @@ def create_order_app(settings: Settings) -> FastAPI:
 
 def create_refund_app(settings: Settings) -> FastAPI:
     catalog = ToolCatalog()
-    _add_refund_tools(catalog)
+    _add_refund_tools(catalog, build_embedder(settings))
     agent = _specialist(
         settings,
         catalog,
@@ -212,7 +213,12 @@ def _service_app(settings: Settings, agent: Agent) -> FastAPI:
             )
             reply = agent.run(body.task, ctx)
             db.commit()
-            return {"reply": reply, "steps": ctx.steps, "agents": ctx.agents_used}
+            return {
+                "reply": reply,
+                "steps": ctx.steps,
+                "agents": ctx.agents_used,
+                "usage": {"charges": [charge.as_dict() for charge in ctx.usage.charges]},
+            }
         except Exception:
             db.rollback()
             raise
@@ -236,17 +242,20 @@ def _add_order_tools(catalog: ToolCatalog) -> None:
     )
 
 
-def _add_refund_tools(catalog: ToolCatalog) -> None:
+def _add_refund_tools(catalog: ToolCatalog, embedder=None) -> None:
+    def policy_tool(arguments: dict, ctx: RequestContext) -> dict:
+        return refund_policy(arguments, ctx, embedder=embedder)
+
     catalog.add(
         Tool(
             name="refund_policy",
-            description="Read the matching section of the return policy.",
+            description="Read the closest section of the return policy.",
             parameters={
                 **_OBJECT,
                 "properties": {"question": {"type": "string"}},
                 "required": ["question"],
             },
-            fn=refund_policy,
+            fn=policy_tool,
         )
     )
     catalog.add(

@@ -7,6 +7,7 @@ from app.context import RequestContext
 from app.db import MemoryFact
 from app.llm import build_model
 from app.planning import preference_fact
+from app.usage import usage_from_charges
 from app.registry import RegisteredAgent, Registry
 from app.services import (
     ORDER_DESCRIPTION,
@@ -79,6 +80,7 @@ def _add_supervisor_tools(catalog: ToolCatalog, registry: Registry, caller: Agen
         )
         for step in result.get("steps") or []:
             ctx.steps.append(step)
+        ctx.usage.merge(usage_from_charges(result.get("usage")))
         for name in result.get("agents") or []:
             if name not in ctx.agents_used:
                 ctx.agents_used.append(name)

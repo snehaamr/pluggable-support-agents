@@ -102,6 +102,17 @@ class TraceSpan(Base):
     duration_ms: Mapped[float] = mapped_column(nullable=False)
 
 
+class TraceUsage(Base):
+    __tablename__ = "trace_usage"
+
+    trace_id: Mapped[str] = mapped_column(String, primary_key=True)
+    session_id: Mapped[str] = mapped_column(String, index=True)
+    customer_id: Mapped[str] = mapped_column(String, index=True)
+    prompt_tokens: Mapped[int] = mapped_column(nullable=False)
+    completion_tokens: Mapped[int] = mapped_column(nullable=False)
+    cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(12, 6), nullable=True)
+
+
 class MemoryFact(Base):
     __tablename__ = "memory_facts"
 

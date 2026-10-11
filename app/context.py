@@ -2,6 +2,8 @@ from dataclasses import dataclass, field
 
 from sqlalchemy.orm import Session
 
+from app.usage import TokenUsage
+
 
 @dataclass
 class RequestContext:
@@ -16,3 +18,4 @@ class RequestContext:
     steps: list[dict] = field(default_factory=list)
     prior_messages: list[dict] = field(default_factory=list)
     memory_facts: list[str] = field(default_factory=list)
+    usage: TokenUsage = field(default_factory=TokenUsage)

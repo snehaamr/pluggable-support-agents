@@ -79,13 +79,23 @@ class OpenAICompatibleModel:
             timeout=self.timeout,
         )
         response.raise_for_status()
-        message = response.json()["choices"][0]["message"]
+        body = response.json()
+        message = body["choices"][0]["message"]
         tool_calls = []
         for call in message.get("tool_calls") or []:
             raw = call["function"].get("arguments") or "{}"
             arguments = json.loads(raw) if isinstance(raw, str) else raw
             tool_calls.append(ToolCall(call["function"]["name"], arguments))
-        return ModelTurn(content=message.get("content"), tool_calls=tool_calls)
+        turn = ModelTurn(content=message.get("content"), tool_calls=tool_calls)
+        raw_usage = body.get("usage") or {}
+        details = raw_usage.get("prompt_tokens_details") or {}
+        turn.usage.add(
+            self.model_name,
+            int(raw_usage.get("prompt_tokens") or 0),
+            int(raw_usage.get("completion_tokens") or 0),
+            int(details.get("cached_tokens") or 0),
+        )
+        return turn
 
 
 def build_model(provider: str, model_name: str, base_url: str, api_key: str, timeout: float = 60.0) -> LanguageModel:
