@@ -103,6 +103,7 @@ def live_client(tmp_path, monkeypatch):
         model_api_key="test-key",
         model_base_url="http://models.test/v1",
         agent_transport="asgi",
+        datadog_api_key="",
     )
     application = create_app(settings)
     with TestClient(application) as test_client:

@@ -1,8 +1,10 @@
+import logging
 import secrets
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
@@ -14,6 +16,8 @@ from app.db import AuthSession, ChatMessage, Customer, MemoryFact, TraceSpan, Tr
 from app.guard import inspect_text, mask_for_storage
 from app.usage import TokenUsage, cost_usd, format_cost, usage_payload
 
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 COOKIE = "support_session"
@@ -44,6 +48,7 @@ def health(request: Request) -> dict:
         "model_name": settings.model_name if settings.model_provider != "deterministic" else "deterministic",
         "order_agent_url": settings.order_agent_url,
         "refund_agent_url": settings.refund_agent_url,
+        "datadog": "enabled" if request.app.state.datadog.enabled else "disabled",
     }
 
 
@@ -152,12 +157,13 @@ def chat(body: ChatIn, request: Request):
 
         now = datetime.now(timezone.utc)
         refusal = inspect_text(body.message)
+        masked = mask_for_storage(body.message)
         db.add(
             ChatMessage(
                 session_id=session_id,
                 customer_id=customer.id,
                 role="user",
-                content=mask_for_storage(body.message),
+                content=masked,
                 created_at=now,
             )
         )
@@ -168,6 +174,7 @@ def chat(body: ChatIn, request: Request):
             steps = [{"agent": "Guard", "tool": "input", "status": "blocked", "duration_ms": 0}]
             usage = TokenUsage()
             _finish_turn(db, session_id, customer.id, trace_id, refusal, steps, usage)
+            _publish_trace(request, customer, session_id, trace_id, masked, refusal, steps, usage)
             return _chat_response(session_id, trace_id, refusal, ["Guard"], steps, usage)
 
         ctx = RequestContext(
@@ -184,6 +191,7 @@ def chat(body: ChatIn, request: Request):
         )
         reply = request.app.state.supervisor.run(body.message, ctx)
         _finish_turn(db, session_id, customer.id, trace_id, reply, ctx.steps, ctx.usage)
+        _publish_trace(request, customer, session_id, trace_id, masked, reply, ctx.steps, ctx.usage)
         return _chat_response(session_id, trace_id, reply, ctx.agents_used, ctx.steps, ctx.usage)
     except HTTPException:
         db.rollback()
@@ -260,6 +268,27 @@ def _finish_turn(db, session_id: str, customer_id: str, trace_id: str, reply: st
         )
     )
     db.commit()
+
+
+def _publish_trace(request, customer, session_id, trace_id, message, reply, steps, usage: TokenUsage) -> None:
+    settings = request.app.state.settings
+    try:
+        request.app.state.datadog.export(
+            trace_id=trace_id,
+            session_id=session_id,
+            customer_id=customer.id,
+            tier=customer.tier,
+            message=message,
+            reply=reply,
+            steps=steps,
+            usage=usage,
+            model_name=settings.model_name,
+            model_provider=settings.model_provider,
+        )
+    except httpx.HTTPStatusError as exc:
+        logger.warning("Datadog export failed with status %s", exc.response.status_code)
+    except httpx.HTTPError:
+        logger.warning("Datadog export could not reach the site")
 
 
 def _stored_usage(stored: TraceUsage | None) -> dict:
