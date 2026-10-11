@@ -15,6 +15,7 @@ def client(tmp_path):
         database_url=f"sqlite:///{tmp_path}/support.db",
         model_provider="deterministic",
         agent_transport="asgi",
+        datadog_api_key="",
     )
     application = create_app(settings)
     with TestClient(application) as test_client:
@@ -38,6 +39,7 @@ def test_health_and_agent_registry(client):
     body = client.get("/health").json()
     assert body["status"] == "ok"
     assert body["model_provider"] == "deterministic"
+    assert body["datadog"] == "disabled"
     agents = {item["name"]: item["role"] for item in client.get("/agents").json()["agents"]}
     assert agents == {
         "Supervisor": "supervisor",
@@ -506,6 +508,7 @@ def test_chat_process_calls_specialists_over_http(tmp_path):
         order_agent_url="http://127.0.0.1:9",
         refund_agent_url="http://127.0.0.1:9",
         model_timeout_seconds=2,
+        datadog_api_key="",
     )
     with TestClient(create_app(settings)) as http_client:
         login(http_client)

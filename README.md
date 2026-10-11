@@ -27,7 +27,7 @@ flowchart TD
 2. A preference such as "I prefer email" is saved and does not start a workflow.
 3. An order or refund request searches the registry and delegates to the specialist URL.
 4. The specialist calls a tool. A policy question returns one section. With a live model, each section is embedded and the closest one is chosen. Keyword matching is used when no model key is set, or when the embedding call fails. A gold question still returns only the Gold line.
-5. The reply, the agents involved, each step's duration, and the model cost come back with a trace id. `GET /traces/{trace_id}` returns the same waterfall and cost. The deterministic planner costs $0.00. Live calls use the published token rates for the model, including `text-embedding-3-small` when a policy section is embedded.
+5. The reply, the agents involved, each step's duration, and the model cost come back with a trace id. `GET /traces/{trace_id}` returns the same waterfall and cost. The deterministic planner costs $0.00. Live calls use the published token rates for the model, including `text-embedding-3-small` when a policy section is embedded. When `DD_API_KEY` is set, the same trace is sent to Datadog LLM Observability under the application `pluggable-support-agents`. A failed send leaves the chat reply in place.
 
 ## Refund rules
 
@@ -97,3 +97,5 @@ Copy `.env.example` to `.env`.
 | `ORDER_AGENT_URL` | Address the supervisor uses for the Order agent. Defaults to `http://127.0.0.1:8001`. |
 | `REFUND_AGENT_URL` | Address the supervisor uses for the Refund agent. Defaults to `http://127.0.0.1:8002`. |
 | `AGENT_TRANSPORT` | `http` calls the specialist URLs. Tests use `asgi` so they do not bind ports. |
+| `DD_API_KEY` | Datadog API key. Leave empty to keep traces local. |
+| `DD_SITE` | Datadog site, such as `datadoghq.com` or `us5.datadoghq.com`. |

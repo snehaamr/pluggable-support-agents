@@ -7,6 +7,7 @@ from sqlalchemy.exc import OperationalError
 
 from app.api import router
 from app.config import Settings
+from app.datadog import DatadogExporter
 from app.db import Base, ensure_auth_columns, make_engine, make_session_factory
 from app.seed import seed
 from app.services import AsgiAgentCaller, HttpAgentCaller, create_order_app, create_refund_app
@@ -49,6 +50,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.catalog = catalog
     app.state.order_app = order_app
     app.state.refund_app = refund_app
+    app.state.datadog = DatadogExporter(settings.datadog_api_key, settings.datadog_site)
     app.include_router(router)
     return app
 
